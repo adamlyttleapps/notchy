@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		BD0000030000000000000003 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = BD0000020000000000000002 /* SwiftTerm */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		31844E332F7210B20074F7B7 /* Notchy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notchy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -27,7 +23,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BD0000030000000000000003 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -69,9 +64,6 @@
 				31844E352F7210B20074F7B7 /* Notchy */,
 			);
 			name = Notchy;
-			packageProductDependencies = (
-				BD0000020000000000000002 /* SwiftTerm */,
-			);
 			productName = Notchy;
 			productReference = 31844E332F7210B20074F7B7 /* Notchy.app */;
 			productType = "com.apple.product-type.application";
@@ -100,9 +92,6 @@
 			);
 			mainGroup = 31844E2A2F7210B20074F7B7;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				BD0000010000000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 31844E342F7210B20074F7B7 /* Products */;
 			projectDirPath = "";
@@ -272,7 +261,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Notchy;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Notchy detects your active Xcode project to manage terminal sessions.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Notchy monitors your iTerm2 sessions to show Claude Code status in the notch.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -310,7 +299,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Notchy;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Notchy detects your active Xcode project to manage terminal sessions.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Notchy monitors your iTerm2 sessions to show Claude Code status in the notch.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -352,25 +341,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		BD0000010000000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		BD0000020000000000000002 /* SwiftTerm */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BD0000010000000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
-			productName = SwiftTerm;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 31844E2B2F7210B20074F7B7 /* Project object */;
 }

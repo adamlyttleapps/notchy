@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: TerminalPanel!
@@ -9,7 +10,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverGlobalMonitor: Any?
     private var hoverLocalMonitor: Any?
     private var hotkeyMonitor: Any?
-    /// Whether the panel was opened via notch hover (vs status item click)
     private var panelOpenedViaHover = false
     private let hoverMargin: CGFloat = 15
     private let hoverHideDelay: TimeInterval = 0.06
@@ -31,15 +31,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             setupNotchWindow()
         }
         setupHotkey()
-        // Detect in background so launch isn't blocked
-        sessionStore.detectAllXcodeProjectsAsync()
     }
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(named: "menuIcon") //NSImage(systemSymbolName: "terminal", accessibilityDescription: "Notchy")
-            button.image?.isTemplate = true  // lets macOS handle light/dark mode
+            button.image = NSImage(named: "menuIcon")
+            button.image?.isTemplate = true
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -48,7 +46,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPanel() {
         panel = TerminalPanel(sessionStore: sessionStore)
-        // When the panel hides for any reason, clean up hover tracking
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification,
             object: panel,
@@ -59,8 +56,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.panelOpenedViaHover = false
             self.stopHoverTracking()
         }
-        // When panel becomes key (user clicked on it), stop hover tracking
-        // since resign-key will handle hiding from here
         NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: panel,
@@ -84,7 +79,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupHotkey() {
-        // Global monitor: fires when another app is focused (backtick = keyCode 50)
         hotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard event.keyCode == 50,
                   event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.function).isEmpty
@@ -98,7 +92,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         showPanelBelowNotch()
         panelOpenedViaHover = true
         startHoverTracking()
-        sessionStore.detectAndSwitchAsync()
     }
 
     private func showPanelBelowNotch() {
@@ -153,7 +146,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard hoverHideTimer == nil else { return }
         hoverHideTimer = Timer.scheduledTimer(withTimeInterval: hoverHideDelay, repeats: false) { [weak self] _ in
             guard let self else { return }
-            // Re-check one more time before hiding (mouse may have returned)
             let mouse = NSEvent.mouseLocation
             let inNotch = self.notchWindow?.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse) ?? false
             let inPanel = self.panel.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse)
@@ -183,11 +175,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             stopHoverTracking()
         } else {
             panelOpenedViaHover = false
-            // Show panel immediately
             showPanelBelowStatusItem()
-
-            // Then detect projects in background
-            sessionStore.detectAndSwitchAsync()
         }
     }
 
@@ -208,8 +196,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !sessionStore.sessions.isEmpty {
             for session in sessionStore.sessions {
                 let item = NSMenuItem(
-                    title: session.projectName,
-                    action: #selector(selectSession(_:)),
+                    title: session.sessionName,
+                    action: #selector(focusSessionMenuItem(_:)),
                     keyEquivalent: ""
                 )
                 item.target = self
@@ -218,71 +206,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             menu.addItem(.separator())
         }
-
-        let newItem = NSMenuItem(
-            title: "New Session",
-            action: #selector(createNewSession),
-            keyEquivalent: "n"
-        )
-        newItem.target = self
-        menu.addItem(newItem)
-        menu.addItem(.separator())
-
-        // Checkpoint section
-//        let eligibleSessions = sessionStore.checkpointEligibleSessions
-//        if !eligibleSessions.isEmpty {
-//            menu.addItem(.separator())
-//
-//            let headingItem = NSMenuItem(title: "Checkpoint", action: nil, keyEquivalent: "")
-//            headingItem.isEnabled = false
-//            menu.addItem(headingItem)
-//
-//            let saveItem = NSMenuItem(
-//                title: "Save...",
-//                action: nil,
-//                keyEquivalent: ""
-//            )
-//            let saveMenu = NSMenu()
-//            for session in eligibleSessions {
-//                let item = NSMenuItem(
-//                    title: session.projectName,
-//                    action: #selector(createCheckpoint(_:)),
-//                    keyEquivalent: ""
-//                )
-//                item.target = self
-//                item.representedObject = session.id
-//                saveMenu.addItem(item)
-//            }
-//            saveItem.submenu = saveMenu
-//            menu.addItem(saveItem)
-//
-//            let restoreItem = NSMenuItem(
-//                title: "Restore from…",
-//                action: nil,
-//                keyEquivalent: ""
-//            )
-//            let restoreMenu = NSMenu()
-//            for session in eligibleSessions {
-//                guard let dir = session.projectPath else { continue }
-//                let projectDir = (dir as NSString).deletingLastPathComponent
-//                let hasCheckpoint = !CheckpointManager.shared.checkpoints(for: session.projectName, in: projectDir).isEmpty
-//                guard hasCheckpoint else { continue }
-//                let item = NSMenuItem(
-//                    title: session.projectName,
-//                    action: #selector(restoreLastCheckpoint(_:)),
-//                    keyEquivalent: ""
-//                )
-//                item.target = self
-//                item.representedObject = session.id
-//                restoreMenu.addItem(item)
-//            }
-//            if restoreMenu.items.count > 0 {
-//                restoreItem.submenu = restoreMenu
-//                menu.addItem(restoreItem)
-//            }
-//        }
-
-//        menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
             title: "Quit Notchy",
@@ -296,24 +219,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = nil
     }
 
-    @objc private func selectSession(_ sender: NSMenuItem) {
+    @objc private func focusSessionMenuItem(_ sender: NSMenuItem) {
         guard let sessionId = sender.representedObject as? UUID else { return }
         sessionStore.selectSession(sessionId)
-        showPanelBelowStatusItem()
-    }
-
-    @objc private func createCheckpoint(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? UUID else { return }
-        sessionStore.createCheckpoint(for: sessionId)
-    }
-
-    @objc private func restoreLastCheckpoint(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? UUID,
-              let session = sessionStore.sessions.first(where: { $0.id == sessionId }),
-              let dir = session.projectPath else { return }
-        let projectDir = (dir as NSString).deletingLastPathComponent
-        guard let latest = CheckpointManager.shared.checkpoints(for: session.projectName, in: projectDir).first else { return }
-        sessionStore.restoreCheckpoint(latest, for: sessionId)
+        sessionStore.focusSession(sessionId)
     }
 
     @objc private func toggleReplaceNotch() {
@@ -326,11 +235,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func createNewSession() {
-        sessionStore.createQuickSession()
-        showPanelBelowStatusItem()
-    }
-
     private func showPanelBelowStatusItem() {
         if let button = statusItem.button,
            let window = button.window {
@@ -339,5 +243,4 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.showPanel(below: screenRect)
         }
     }
-
 }

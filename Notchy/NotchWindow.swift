@@ -554,16 +554,10 @@ struct NotchPillContent: View {
 
                 if displayState != .idle {
 
-                    Rectangle()
-                        .foregroundColor(.clear)
+                    Image(systemName: "apple.terminal")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white.opacity(0.8))
                         .frame(width: 18, height: 18)
-                        .overlay(alignment: .leading) {
-                            BotFaceView() //state: displayState
-                                .frame(width: 20, height: 15)
-                                .mask(RoundedRectangle(cornerRadius: 5))
-                        }
-//                        .offset(x: 2)
-//                        .padding(.leading, -2)
 
 
                     Spacer()

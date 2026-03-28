@@ -9,14 +9,10 @@ struct SessionTabBar: View {
                 SessionTab(
                     session: session,
                     isActive: session.id == sessionStore.activeSessionId,
-                    terminalActive: session.hasStarted && sessionStore.activeXcodeProjects.contains(session.projectName),
                     terminalStatus: session.terminalStatus,
                     foregroundOpacity: sessionStore.isWindowFocused ? 1.0 : 0.6,
                     onSelect: { sessionStore.selectSession(session.id) },
-                    onClose: { sessionStore.closeSession(session.id) },
-                    onRename: { newName in
-                        sessionStore.renameSession(session.id, to: newName)
-                    }
+                    onFocus: { sessionStore.focusSession(session.id) }
                 )
             }
         }
@@ -27,26 +23,14 @@ struct SessionTabBar: View {
 struct SessionTab: View {
     let session: TerminalSession
     let isActive: Bool
-    let terminalActive: Bool
     var terminalStatus: TerminalStatus = .idle
     var foregroundOpacity: Double = 1.0
     let onSelect: () -> Void
-    let onClose: () -> Void
-    let onRename: (String) -> Void
+    let onFocus: () -> Void
 
     @State private var isHovering = false
-    @State private var showRenameDialog = false
-    @State private var renameText = ""
-    @State private var latestCheckpoint: Checkpoint?
-    @State private var showRestoreConfirmation = false
 
-    private var name: String { session.projectName }
-
-    private func refreshLatestCheckpoint() {
-        guard let dir = session.projectPath else { return }
-        let projectDir = (dir as NSString).deletingLastPathComponent
-        latestCheckpoint = CheckpointManager.shared.checkpoints(for: session.projectName, in: projectDir).first
-    }
+    private var name: String { session.sessionName }
 
     @ViewBuilder
     private var statusIndicator: some View {
@@ -74,7 +58,6 @@ struct SessionTab: View {
             statusIndicator
 
             ZStack {
-                // Hidden semibold text prevents tab width change on selection
                 Text(name)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
@@ -108,66 +91,9 @@ struct SessionTab: View {
         }
         .onTapGesture(perform: onSelect)
         .contextMenu {
-//            Button("Save Checkpoint") {
-//                SessionStore.shared.createCheckpointForActiveSession()
-//            }
-//            .disabled(session.projectPath == nil)
-//
-//            if latestCheckpoint != nil {
-//                Button("Restore Last Checkpoint") {
-//                    showRestoreConfirmation = true
-//                }
-//            }
-//
-//            Divider()
-        
-//            Button("Refresh") {
-//                SessionStore.shared.restartSession(session.id)
-//            }
-
-            Button("Rename Tab") {
-                renameText = name
-                showRenameDialog = true
+            Button("Focus in iTerm2") {
+                onFocus()
             }
-
-            Button("Close", role: .destructive) {
-                onClose()
-            }
-        }
-        .onAppear {
-            refreshLatestCheckpoint()
-        }
-        .onChange(of: isHovering) {
-            if isHovering {
-                refreshLatestCheckpoint()
-            }
-        }
-        .alert("Restore Last Checkpoint", isPresented: $showRestoreConfirmation) {
-            Button("Restore", role: .destructive) {
-                if let checkpoint = latestCheckpoint {
-                    guard let dir = session.projectPath else { return }
-                    let projectDir = (dir as NSString).deletingLastPathComponent
-                    try? CheckpointManager.shared.restoreCheckpoint(checkpoint, to: projectDir)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will overwrite your current working directory with the checkpoint. Are you sure?")
-        }
-        .alert("Rename Tab", isPresented: $showRenameDialog) {
-            TextField("Tab name", text: $renameText)
-            Button("Rename") {
-                if !renameText.isEmpty {
-                    onRename(renameText)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .onChange(of: showRenameDialog) {
-            SessionStore.shared.isShowingDialog = showRenameDialog || showRestoreConfirmation
-        }
-        .onChange(of: showRestoreConfirmation) {
-            SessionStore.shared.isShowingDialog = showRenameDialog || showRestoreConfirmation
         }
     }
 }
@@ -184,4 +110,3 @@ struct TabSpinnerView: View {
             .onAppear { isAnimating = true }
     }
 }
-

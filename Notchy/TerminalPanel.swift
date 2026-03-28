@@ -8,13 +8,13 @@ class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
 class TerminalPanel: NSPanel {
     private let sessionStore: SessionStore
     private static let collapsedHeight: CGFloat = 44
-    private var expandedHeight: CGFloat = 500
+    private var expandedHeight: CGFloat = 160
 
     init(sessionStore: SessionStore) {
         self.sessionStore = sessionStore
 
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 160),
             styleMask: [.borderless, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -28,7 +28,7 @@ class TerminalPanel: NSPanel {
         isOpaque = false
         animationBehavior = .none
         hidesOnDeactivate = false
-        minSize = NSSize(width: 480, height: 300)
+        minSize = NSSize(width: 320, height: 100)
 
         let contentView = PanelContentView(
             sessionStore: sessionStore,
@@ -97,21 +97,19 @@ class TerminalPanel: NSPanel {
     private func handleToggleExpand() {
         updateOpacity()
         if sessionStore.isTerminalExpanded {
-            // Expanding: restore saved height, anchor top edge
             let newHeight = expandedHeight
             var newFrame = frame
             newFrame.origin.y -= (newHeight - frame.height)
             newFrame.size.height = newHeight
-            minSize = NSSize(width: 480, height: 300)
+            minSize = NSSize(width: 320, height: 100)
             setFrame(newFrame, display: true, animate: false)
         } else {
-            // Collapsing: save current height, shrink to tab bar only
             expandedHeight = frame.height
             let newHeight = Self.collapsedHeight
             var newFrame = frame
             newFrame.origin.y += (frame.height - newHeight)
             newFrame.size.height = newHeight
-            minSize = NSSize(width: 480, height: Self.collapsedHeight)
+            minSize = NSSize(width: 320, height: Self.collapsedHeight)
             setFrame(newFrame, display: true, animate: false)
         }
     }
@@ -125,7 +123,6 @@ class TerminalPanel: NSPanel {
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
-        sessionStore.panelDidBecomeKey()
         updateOpacity()
     }
 
@@ -139,33 +136,16 @@ class TerminalPanel: NSPanel {
     private func updateOpacity() {
         let collapsed = !sessionStore.isTerminalExpanded
         let unfocused = !isKeyWindow
-        // Collapsed + unfocused: dim the whole window
         alphaValue = (collapsed && unfocused) ? 0.8 : 1.0
-        // Expanded + unfocused: clear window background so SwiftUI chrome
-        // transparency shows through (terminal stays opaque via its own view)
         backgroundColor = .clear
     }
 
     override func sendEvent(_ event: NSEvent) {
         let wasKey = isKeyWindow
         super.sendEvent(event)
-        // When the panel wasn't key, the first click just activates the window.
-        // Re-send it so SwiftUI controls (tabs, buttons) process the click too.
         if !wasKey && event.type == .leftMouseDown {
             super.sendEvent(event)
         }
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "s" {
-            sessionStore.createCheckpointForActiveSession()
-            return true
-        }
-        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "t" {
-            sessionStore.createQuickSession()
-            return true
-        }
-        return super.performKeyEquivalent(with: event)
     }
 
     override var canBecomeKey: Bool { true }

@@ -1,7 +1,8 @@
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 
-@available(macOS 26.0, *)
 class StatusDescriptionGenerator {
     static let shared = StatusDescriptionGenerator()
 
@@ -13,6 +14,9 @@ class StatusDescriptionGenerator {
         terminalStatus: TerminalStatus,
         projectName: String
     ) async -> String? {
+#if canImport(FoundationModels)
+        guard #available(macOS 26.0, *) else { return nil }
+
         // Skip if already generating for this session
         guard !inFlightSessions.contains(sessionId) else { return nil }
         inFlightSessions.insert(sessionId)
@@ -62,6 +66,9 @@ class StatusDescriptionGenerator {
             // Error generating status
             return nil
         }
+#else
+        return nil
+#endif
     }
 
     func generateWaitingForInputStatus(
@@ -69,6 +76,9 @@ class StatusDescriptionGenerator {
         visibleText: String,
         projectName: String
     ) async -> String? {
+#if canImport(FoundationModels)
+        guard #available(macOS 26.0, *) else { return nil }
+
         guard !inFlightSessions.contains(sessionId) else { return nil }
         inFlightSessions.insert(sessionId)
         defer { inFlightSessions.remove(sessionId) }
@@ -101,6 +111,9 @@ class StatusDescriptionGenerator {
             // Error generating status
             return nil
         }
+#else
+        return nil
+#endif
     }
 
     func generateTaskCompletedStatus(
@@ -108,6 +121,9 @@ class StatusDescriptionGenerator {
         visibleText: String,
         projectName: String
     ) async -> String? {
+#if canImport(FoundationModels)
+        guard #available(macOS 26.0, *) else { return nil }
+
         guard !inFlightSessions.contains(sessionId) else { return nil }
         inFlightSessions.insert(sessionId)
         defer { inFlightSessions.remove(sessionId) }
@@ -139,6 +155,9 @@ class StatusDescriptionGenerator {
             // Error generating status
             return nil
         }
+#else
+        return nil
+#endif
     }
 
     func expiryDuration(for status: TerminalStatus) -> TimeInterval? {

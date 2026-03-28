@@ -1,0 +1,42 @@
+name: Build Notchy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Resolve Swift packages
+        run: xcodebuild -project Notchy.xcodeproj -scheme Notchy -resolvePackageDependencies
+
+      - name: Build
+        run: |
+          xcodebuild -project Notchy.xcodeproj \
+            -scheme Notchy \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package app
+        run: |
+          cd build/Build/Products/Release
+          zip -r Notchy.zip Notchy.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Notchy
+          path: build/Build/Products/Release/Notchy.zip
+          retention-days: 90

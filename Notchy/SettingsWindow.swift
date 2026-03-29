@@ -33,7 +33,7 @@ struct SettingsContentView: View {
                 .tabItem { Label(SettingsTab.integrations.rawValue, systemImage: SettingsTab.integrations.icon) }
                 .tag(SettingsTab.integrations)
         }
-        .frame(width: 450, height: 240)
+        .frame(width: 450, height: 300)
     }
 }
 
@@ -43,10 +43,21 @@ struct GeneralTab: View {
 
     var body: some View {
         Form {
+            Picker("Terminal backend", selection: $settings.terminalBackend) {
+                ForEach(TerminalBackend.allCases) { backend in
+                    Text(backend.title).tag(backend)
+                }
+            }
+            Text(settings.terminalBackend == .ghostty
+                 ? "Ghostty opens sessions in an external window and requires Ghostty 1.3+ for automation. Live Claude status stays in the embedded backend for now."
+                 : "Embedded uses Notchy's built-in SwiftTerm terminal and supports live Claude status.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("Show notch overlay", isOn: $settings.showNotch)
                 .onChange(of: settings.showNotch) { _, newValue in
                     onShowNotchChanged?(newValue)
                 }
+            Toggle("Open panel on notch hover", isOn: $settings.hoverToOpenEnabled)
             Toggle("Enable sounds", isOn: $settings.soundsEnabled)
         }
         .padding(20)
@@ -118,7 +129,7 @@ class SettingsWindowController {
         let hostingView = NSHostingView(rootView: content)
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 450, height: 240),
+            contentRect: NSRect(x: 0, y: 0, width: 450, height: 300),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

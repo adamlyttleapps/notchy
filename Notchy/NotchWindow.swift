@@ -16,6 +16,8 @@ class NotchWindow: NSPanel {
     /// Closure to check if the main panel is currently visible.
     /// When the panel is visible, the notch stays in hover-grown size.
     var isPanelVisible: (() -> Bool)?
+    /// Closure to check whether hover-open is currently enabled.
+    var isHoverEnabled: (() -> Bool)?
 
     /// Detected notch dimensions (updated on screen change).
     private var notchWidth: CGFloat = 180
@@ -30,11 +32,15 @@ class NotchWindow: NSPanel {
 
     /// Whether the mouse is currently hovering over the notch
     private var isHovered = false
+    /// Whether the overlay is temporarily letting clicks pass through.
+    private var isPassThroughActive = false
     /// The pill-shaped background view shown when expanded
     private let pillView = NotchPillView()
 
     /// SwiftUI content overlay shown inside the pill when expanded
     private var pillContentHost: NSHostingView<NotchPillContent>?
+
+    private static let passThroughAlpha: CGFloat = 0.2
 
     init(onHover: @escaping () -> Void) {
         self.onHover = onHover
@@ -92,6 +98,7 @@ class NotchWindow: NSPanel {
     // MARK: - Drag destination (treat drag-over like hover)
 
     func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard isHoverEnabled?() ?? true else { return [] }
         onHover?()
         return .generic
     }
@@ -323,8 +330,6 @@ class NotchWindow: NSPanel {
 
     private func checkMouse() {
         let mouseLocation = NSEvent.mouseLocation
-
-        // Check the notch area itself
         guard let screen = NSScreen.builtIn else { return }
         let screenFrame = screen.frame
         let effectiveWidth = isExpanded ? notchWidth + 80 : notchWidth
@@ -334,8 +339,20 @@ class NotchWindow: NSPanel {
             width: effectiveWidth,
             height: notchHeight + 1  // +1 so the top screen edge (maxY) is inside the rect
         )
-
         let mouseInNotch = notchRect.contains(mouseLocation)
+
+        let hoverEnabled = isHoverEnabled?() ?? true
+        if !hoverEnabled {
+            updatePassThrough(active: mouseInNotch)
+            if isHovered {
+                isHovered = false
+                hoverShrink()
+            }
+            return
+        }
+
+        updatePassThrough(active: false)
+
         let mouseInAdditional = additionalHoverRects.contains { $0().contains(mouseLocation) }
 
         if mouseInNotch || mouseInAdditional {
@@ -362,6 +379,19 @@ class NotchWindow: NSPanel {
         guard isHovered else { return }
         isHovered = false
         hoverShrink()
+    }
+
+    private func updatePassThrough(active: Bool) {
+        guard active != isPassThroughActive else { return }
+        isPassThroughActive = active
+        ignoresMouseEvents = active
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            let targetAlpha: CGFloat = active ? Self.passThroughAlpha : 1
+            pillView.animator().alphaValue = targetAlpha
+            pillContentHost?.animator().alphaValue = targetAlpha
+        }
     }
 
     // MARK: - Hover grow / shrink

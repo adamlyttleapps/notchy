@@ -235,7 +235,13 @@ class SessionStore {
     func startSessionIfNeeded(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !sessions[index].hasStarted {
-            sessions[index].hasStarted = true
+            let session = sessions[index]
+            let started = TerminalManager.shared.launchConfiguredTerminal(
+                for: id,
+                workingDirectory: session.workingDirectory,
+                launchClaude: session.projectPath != nil
+            )
+            sessions[index].hasStarted = started
         }
     }
 
@@ -413,6 +419,8 @@ class SessionStore {
         TerminalManager.shared.destroyTerminal(for: id)
         sessions[index].terminalStatus = .idle
         sessions[index].generation += 1
+        sessions[index].hasStarted = false
+        startSessionIfNeeded(id)
     }
 
     func closeSession(_ id: UUID) {

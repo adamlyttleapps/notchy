@@ -35,6 +35,7 @@ struct PanelContentView: View {
     var onClose: () -> Void
     var onToggleExpand: (() -> Void)?
     @State private var showRestoreConfirmation = false
+    @Bindable private var settings = SettingsManager.shared
 
     private var foregroundOpacity: Double {
         sessionStore.isWindowFocused ? 1.0 : 0.6
@@ -187,12 +188,16 @@ struct PanelContentView: View {
                 // Terminal area
                 if let session = sessionStore.activeSession {
                     if session.hasStarted {
-                        TerminalSessionView(
-                            sessionId: session.id,
-                            workingDirectory: session.workingDirectory,
-                            launchClaude: session.projectPath != nil,
-                            generation: session.generation
-                        )
+                        if settings.terminalBackend == .embedded {
+                            TerminalSessionView(
+                                sessionId: session.id,
+                                workingDirectory: session.workingDirectory,
+                                launchClaude: session.projectPath != nil,
+                                generation: session.generation
+                            )
+                        } else {
+                            externalTerminalPlaceholder(for: session, message: "Session opened in Ghostty")
+                        }
                     } else if session.projectPath != nil && !sessionStore.activeXcodeProjects.contains(session.projectName) {
                         // Xcode closed for this project
                         placeholderView("Xcode project not open")
@@ -212,10 +217,14 @@ struct PanelContentView: View {
                                 }
                             }
                     } else {
-                        placeholderView("Click a project tab to start a terminal session")
-                            .onTapGesture {
-                                sessionStore.startSessionIfNeeded(session.id)
-                            }
+                        if settings.terminalBackend == .embedded {
+                            placeholderView("Click a project tab to start a terminal session")
+                                .onTapGesture {
+                                    sessionStore.startSessionIfNeeded(session.id)
+                                }
+                        } else {
+                            externalTerminalPlaceholder(for: session, message: ghosttyMessage)
+                        }
                     }
                 } else if sessionStore.sessions.isEmpty {
                     placeholderView("No Xcode projects detected.\nClick + to create a new session.")
@@ -269,6 +278,67 @@ struct PanelContentView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .opacity(0)
+            }
+    }
+
+    private var ghosttyMessage: String {
+        if !TerminalManager.shared.isGhosttyAvailable {
+            return "Ghostty isn't installed. Install it or switch back to the embedded terminal backend."
+        }
+
+        if !TerminalManager.shared.supportsGhosttyAutomation {
+            let version = TerminalManager.shared.ghosttyVersion ?? "unknown"
+            return "Ghostty \(version) is installed, but Notchy needs Ghostty 1.3.0 or newer for automation."
+        }
+
+        return "Open this session in Ghostty"
+    }
+
+    @ViewBuilder
+    private func externalTerminalPlaceholder(for session: TerminalSession, message: String) -> some View {
+        Color(nsColor: NSColor(white: 0.1, alpha: 1.0))
+            .overlay {
+                VStack(spacing: 12) {
+                    Text(message)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    if TerminalManager.shared.supportsGhosttyAutomation {
+                        Button(session.hasStarted ? "Reopen in Ghostty" : "Open in Ghostty") {
+                            sessionStore.restartSession(session.id)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else if !TerminalManager.shared.isGhosttyAvailable {
+                        Button("Download Ghostty") {
+                            NSWorkspace.shared.open(URL(string: "https://ghostty.org/download")!)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        Button("Download Ghostty 1.3+") {
+                            NSWorkspace.shared.open(URL(string: "https://ghostty.org/download")!)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
             }
     }
 }

@@ -75,6 +75,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         notchWindow?.isPanelVisible = { [weak self] in
             self?.panel.isVisible ?? false
         }
+        notchWindow?.isHoverEnabled = { [weak self] in
+            self?.settings.hoverToOpenEnabled ?? true
+        }
     }
 
     private func setupHotkey() {

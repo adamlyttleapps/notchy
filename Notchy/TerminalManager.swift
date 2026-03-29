@@ -33,6 +33,18 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.window?.firstResponder === self else { return event }
 
+            // Shift+Enter → send newline without submitting (for multi-line input)
+            if event.keyCode == 36 && event.modifierFlags.contains(.shift) {
+                self.send(txt: "\n")
+                return nil
+            }
+
+            // Cmd+Backspace → kill line (send Ctrl-U to clear from cursor to start of line)
+            if event.keyCode == 51 && event.modifierFlags.contains(.command) {
+                self.send(txt: "\u{15}")
+                return nil
+            }
+
             let arrowCode: String?
             switch event.keyCode {
             case 126: arrowCode = "A" // Up

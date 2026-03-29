@@ -187,11 +187,11 @@ struct PanelContentView: View {
                 // Terminal area
                 if let session = sessionStore.activeSession {
                     if session.hasStarted {
-                        TerminalSessionView(
-                            sessionId: session.id,
-                            workingDirectory: session.workingDirectory,
+                        SplitPaneView(
+                            node: session.splitRoot,
                             launchClaude: session.projectPath != nil,
-                            generation: session.generation
+                            generation: session.generation,
+                            sessionStore: sessionStore
                         )
                     } else if session.projectPath != nil && !sessionStore.activeXcodeProjects.contains(session.projectName) {
                         // Xcode closed for this project
@@ -224,9 +224,9 @@ struct PanelContentView: View {
                 }
             }
         }
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8.5, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 8.5))
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8.5, bottomLeadingRadius: 9.5, bottomTrailingRadius: 9.5, topTrailingRadius: 8.5))
         .background(Color(nsColor: NSColor(white: 0.1, alpha: 1.0)).opacity(chromeBackgroundOpacity))
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8.5, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 8.5))
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8.5, bottomLeadingRadius: 9.5, bottomTrailingRadius: 9.5, topTrailingRadius: 8.5))
         .onAppear {
             sessionStore.refreshLastCheckpoint()
         }

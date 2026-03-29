@@ -4,6 +4,7 @@ import SwiftTerm
 class ClickThroughTerminalView: LocalProcessTerminalView {
     var sessionId: UUID?
     private var keyMonitor: Any?
+    private var clickMonitor: Any?
     private var statusDebounceTimer: Timer?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -12,17 +13,37 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
         installArrowKeyMonitor()
+        installClickMonitor()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         registerForDraggedTypes([.fileURL])
         installArrowKeyMonitor()
+        installClickMonitor()
     }
 
     deinit {
         if let monitor = keyMonitor {
             NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = clickMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    private func installClickMonitor() {
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self, let id = self.sessionId,
+                  let eventWindow = event.window,
+                  eventWindow === self.window else { return event }
+            let locationInView = self.convert(event.locationInWindow, from: nil)
+            if self.bounds.contains(locationInView) {
+                DispatchQueue.main.async {
+                    SessionStore.shared.focusPane(id)
+                }
+            }
+            return event
         }
     }
 
@@ -31,6 +52,12 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
     private func installArrowKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.window?.firstResponder === self else { return event }
+
+            // Shift+Enter → send newline sequence for Claude Code multiline input
+            if event.keyCode == 36 && event.modifierFlags.contains(.shift) {
+                self.send(txt: "\u{1b}[13;2u")
+                return nil
+            }
 
             let arrowCode: String?
             switch event.keyCode {
@@ -137,18 +164,18 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
         if Self.hasTokenCounterLine(visibleText) || fullText.contains("esc to interrupt") {
             newStatus = .working
         }
-        else if fullText.contains("Esc to cancel") || Self.hasUserPrompt(fullText) {
+        else if fullText.contains("Esc to cancel") {
+            // Claude needs a decision (tool permission, file edit, etc.)
             newStatus = .waitingForInput
         } else if visibleText.contains("Interrupted") {
             newStatus = .interrupted
         } else {
+            // Includes Claude's ❯ prompt (task finished) and shell prompt
             newStatus = .idle
         }
 
-        if !SessionStore.shared.sessions.contains(where: {$0.id == id && $0.terminalStatus == newStatus}) {
-            DispatchQueue.main.async {
-                SessionStore.shared.updateTerminalStatus(id, status: newStatus)
-            }
+        DispatchQueue.main.async {
+            SessionStore.shared.updateTerminalStatus(id, status: newStatus)
         }
     }
 
@@ -165,17 +192,6 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
             guard trimmed.hasSuffix("s") else { return false }
             guard !trimmed.contains("(") && !trimmed.contains(")") else { return false }
             return true
-        }
-    }
-
-    /// Checks for the user prompt indicator: ❯ followed by a digit (1-9)
-    private static func hasUserPrompt(_ text: String) -> Bool {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        return lines.contains { line in
-            let trimmed = line.drop(while: { $0 == " " })
-            return trimmed.hasPrefix("❯") &&
-                trimmed.dropFirst().first == " " &&
-                trimmed.dropFirst(2).first?.isNumber == true
         }
     }
 
@@ -241,8 +257,15 @@ class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         guard let dir = directory,
               let terminal = source as? ClickThroughTerminalView,
               let sessionId = terminal.sessionId else { return }
+        // OSC 7 sends directory as file://hostname/path — extract just the path
+        let path: String
+        if let url = URL(string: dir), url.scheme == "file" {
+            path = url.path
+        } else {
+            path = dir
+        }
         DispatchQueue.main.async {
-            SessionStore.shared.updateWorkingDirectory(sessionId, directory: dir)
+            SessionStore.shared.updateWorkingDirectory(sessionId, directory: path)
         }
     }
 
@@ -254,6 +277,11 @@ class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         return terminal.extractVisibleText()
     }
 
+    func focusTerminal(for paneId: UUID) {
+        guard let terminal = terminals[paneId] else { return }
+        terminal.window?.makeFirstResponder(terminal)
+    }
+
     func destroyTerminal(for sessionId: UUID) {
         terminals.removeValue(forKey: sessionId)
     }
@@ -262,6 +290,9 @@ class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
+        // Enable OSC 7 directory reporting — macOS /etc/zshrc only sends it
+        // when TERM_PROGRAM is "Apple_Terminal"
+        env["TERM_PROGRAM"] = "Apple_Terminal"
         return env.map { "\($0.key)=\($0.value)" }
     }
 

@@ -236,6 +236,25 @@ class TerminalPanel: NSPanel {
             sessionStore.focusPreviousPane()
             return true
         }
+        // Cmd+1-9 → jump to nth tab
+        if mods == .command, let digit = chars.first?.wholeNumberValue, (1...9).contains(digit) {
+            let index = digit - 1
+            if index < sessionStore.sessions.count {
+                sessionStore.selectSession(sessionStore.sessions[index].id)
+            }
+            return true
+        }
+        // Cmd+Shift+Left/Right → move active tab
+        if mods == [.command, .shift] {
+            if event.keyCode == 123, let id = sessionStore.activeSessionId {
+                sessionStore.moveSessionLeft(id)
+                return true
+            }
+            if event.keyCode == 124, let id = sessionStore.activeSessionId {
+                sessionStore.moveSessionRight(id)
+                return true
+            }
+        }
         return super.performKeyEquivalent(with: event)
     }
 

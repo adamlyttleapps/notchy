@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import SwiftUI
+import UserNotifications
 
 extension Notification.Name {
     static let NotchyHidePanel = Notification.Name("NotchyHidePanel")
@@ -78,6 +79,22 @@ class SessionStore {
     init() {
         restoreSessions()
         updatePollingTimer()
+        requestNotificationPermission()
+    }
+
+    // MARK: - Native Notifications
+
+    private func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    }
+
+    private func sendNotification(title: String, body: String) {
+        guard !isWindowFocused else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Session Persistence
@@ -263,6 +280,18 @@ class SessionStore {
         }
     }
 
+    func moveSessionLeft(_ sessionId: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionId }), index > 0 else { return }
+        sessions.swapAt(index, index - 1)
+        persistSessions()
+    }
+
+    func moveSessionRight(_ sessionId: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionId }), index < sessions.count - 1 else { return }
+        sessions.swapAt(index, index + 1)
+        persistSessions()
+    }
+
     /// "+" button: creates a plain terminal session with no project association
     func createQuickSession() {
         let session = TerminalSession(
@@ -297,10 +326,12 @@ class SessionStore {
             sessions[index].paneWorkingStartedAt[paneId] = Date()
         }
 
-        // Aggregate status change triggers sounds/UI
+        // Aggregate status change triggers sounds/UI/notifications
         if newAggregate != previousAggregate {
+            let sessionName = sessions[index].projectName
             if newAggregate == .waitingForInput && previousAggregate != .waitingForInput {
                 playSound(named: "waitingForInput")
+                sendNotification(title: "Action Required", body: "\(sessionName) needs your input")
                 if isPinned && !isTerminalExpanded && sessionId == activeSessionId {
                     isTerminalExpanded = true
                     NotificationCenter.default.post(name: .NotchyExpandPanel, object: nil)
@@ -308,6 +339,7 @@ class SessionStore {
             }
             else if newAggregate == .taskCompleted && previousAggregate != .taskCompleted {
                 playSound(named: "taskCompleted")
+                sendNotification(title: "Task Completed", body: "\(sessionName) finished")
             }
             NotificationCenter.default.post(name: .NotchyNotchStatusChanged, object: nil)
         }

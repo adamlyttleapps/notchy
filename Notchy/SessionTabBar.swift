@@ -1,24 +1,109 @@
 import SwiftUI
 
+struct TabFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 struct SessionTabBar: View {
     @Bindable var sessionStore: SessionStore
+    @State private var draggingSessionId: UUID?
+    @State private var dragOffset: CGFloat = 0
+    @State private var tabFrames: [UUID: CGRect] = [:]
+    @State private var dragAccumulatedShift: CGFloat = 0
+    @State private var lastSwapDate: Date = .distantPast
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(sessionStore.sessions) { session in
+                let index = sessionStore.sessions.firstIndex(where: { $0.id == session.id })
                 SessionTab(
                     session: session,
                     isActive: session.id == sessionStore.activeSessionId,
                     terminalActive: session.hasStarted && sessionStore.activeXcodeProjects.contains(session.projectName),
                     terminalStatus: session.terminalStatus,
                     foregroundOpacity: sessionStore.isWindowFocused ? 1.0 : 0.6,
-                    onSelect: { sessionStore.selectSession(session.id) },
+                    canMoveLeft: (index ?? 0) > 0,
+                    canMoveRight: (index ?? 0) < sessionStore.sessions.count - 1,
+                    onSelect: {
+                        if draggingSessionId == nil {
+                            sessionStore.selectSession(session.id)
+                        }
+                    },
                     onClose: { sessionStore.closeSession(session.id) },
                     onRename: { newName in
                         sessionStore.renameSession(session.id, to: newName)
+                    },
+                    onMoveLeft: { sessionStore.moveSessionLeft(session.id) },
+                    onMoveRight: { sessionStore.moveSessionRight(session.id) }
+                )
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: TabFramePreferenceKey.self,
+                            value: [session.id: geo.frame(in: .named("tabBar"))]
+                        )
                     }
                 )
+                .offset(x: draggingSessionId == session.id ? dragOffset - dragAccumulatedShift : 0)
+                .zIndex(draggingSessionId == session.id ? 1 : 0)
+                .opacity(draggingSessionId == session.id ? 0.8 : 1.0)
+                .scaleEffect(draggingSessionId == session.id ? 1.05 : 1.0)
+                .animation(.easeInOut(duration: 0.15), value: draggingSessionId)
+                .gesture(
+                    DragGesture(minimumDistance: 8, coordinateSpace: .named("tabBar"))
+                        .onChanged { value in
+                            if draggingSessionId == nil {
+                                draggingSessionId = session.id
+                                dragAccumulatedShift = 0
+                            }
+                            dragOffset = value.translation.width
+
+                            // Cooldown: skip if last swap was < 250ms ago
+                            guard Date().timeIntervalSince(lastSwapDate) > 0.25 else { return }
+                            guard let currentIndex = sessionStore.sessions.firstIndex(where: { $0.id == session.id }) else { return }
+
+                            let visualOffset = dragOffset - dragAccumulatedShift
+
+                            // Only check immediate neighbors
+                            if visualOffset > 0, currentIndex < sessionStore.sessions.count - 1 {
+                                let rightNeighbor = sessionStore.sessions[currentIndex + 1]
+                                if let neighborFrame = tabFrames[rightNeighbor.id],
+                                   visualOffset > neighborFrame.width * 0.5 {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        sessionStore.sessions.swapAt(currentIndex, currentIndex + 1)
+                                    }
+                                    dragAccumulatedShift += neighborFrame.width + 2
+                                    lastSwapDate = Date()
+                                }
+                            } else if visualOffset < 0, currentIndex > 0 {
+                                let leftNeighbor = sessionStore.sessions[currentIndex - 1]
+                                if let neighborFrame = tabFrames[leftNeighbor.id],
+                                   -visualOffset > neighborFrame.width * 0.5 {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        sessionStore.sessions.swapAt(currentIndex, currentIndex - 1)
+                                    }
+                                    dragAccumulatedShift -= neighborFrame.width + 2
+                                    lastSwapDate = Date()
+                                }
+                            }
+                        }
+                        .onEnded { _ in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                dragOffset = 0
+                                dragAccumulatedShift = 0
+                            }
+                            draggingSessionId = nil
+                            sessionStore.saveSessions()
+                        }
+                )
             }
+        }
+        .coordinateSpace(name: "tabBar")
+        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
+            tabFrames = frames
         }
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -30,9 +115,13 @@ struct SessionTab: View {
     let terminalActive: Bool
     var terminalStatus: TerminalStatus = .idle
     var foregroundOpacity: Double = 1.0
+    var canMoveLeft: Bool = false
+    var canMoveRight: Bool = false
     let onSelect: () -> Void
     let onClose: () -> Void
     let onRename: (String) -> Void
+    var onMoveLeft: (() -> Void)?
+    var onMoveRight: (() -> Void)?
 
     @State private var isHovering = false
     @State private var showRenameDialog = false
@@ -108,22 +197,36 @@ struct SessionTab: View {
         }
         .onTapGesture(perform: onSelect)
         .contextMenu {
-//            Button("Save Checkpoint") {
-//                SessionStore.shared.createCheckpointForActiveSession()
-//            }
-//            .disabled(session.projectPath == nil)
-//
-//            if latestCheckpoint != nil {
-//                Button("Restore Last Checkpoint") {
-//                    showRestoreConfirmation = true
-//                }
-//            }
-//
-//            Divider()
-        
-//            Button("Refresh") {
-//                SessionStore.shared.restartSession(session.id)
-//            }
+            if session.projectPath != nil {
+                Button("Save Checkpoint") {
+                    SessionStore.shared.createCheckpoint(for: session.id)
+                }
+
+                if latestCheckpoint != nil {
+                    Button("Restore Last Checkpoint") {
+                        showRestoreConfirmation = true
+                    }
+                }
+
+                Divider()
+            }
+
+            Button("Restart") {
+                SessionStore.shared.restartSession(session.id)
+            }
+
+            if canMoveLeft {
+                Button("Move Left") {
+                    onMoveLeft?()
+                }
+            }
+            if canMoveRight {
+                Button("Move Right") {
+                    onMoveRight?()
+                }
+            }
+
+            Divider()
 
             Button("Rename Tab") {
                 renameText = name

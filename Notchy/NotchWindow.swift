@@ -558,13 +558,10 @@ struct NotchPillContent: View {
                         .foregroundColor(.clear)
                         .frame(width: 18, height: 18)
                         .overlay(alignment: .leading) {
-                            BotFaceView() //state: displayState
+                            BotFaceView()
                                 .frame(width: 20, height: 15)
                                 .mask(RoundedRectangle(cornerRadius: 5))
                         }
-//                        .offset(x: 2)
-//                        .padding(.leading, -2)
-
 
                     Spacer()
 
@@ -590,11 +587,6 @@ struct NotchPillContent: View {
             }
             .animation(.easeInOut(duration: 0.25), value: displayState)
             .padding(.horizontal, 12 + (isHovering ? NotchPillView.earRadius : 0))
-
-            // Debug: show current displayState
-//            Text("\(String(describing: displayState))")
-//                .font(.system(size: 10, weight: .medium, design: .monospaced))
-//                .foregroundColor(.white)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)

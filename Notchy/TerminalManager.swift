@@ -193,8 +193,44 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
 
 class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
     static let shared = TerminalManager()
+    private static let ghosttyApplicationName = "Ghostty"
+    private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+    private static let minimumGhosttyAutomationVersion = "1.3.0"
 
     private var terminals: [UUID: LocalProcessTerminalView] = [:]
+
+    private var ghosttyAppURL: URL? {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.ghosttyBundleIdentifier) {
+            return appURL
+        }
+
+        let localApplications = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications/Ghostty.app")
+        if FileManager.default.fileExists(atPath: localApplications.path) {
+            return localApplications
+        }
+
+        let systemApplications = URL(fileURLWithPath: "/Applications/Ghostty.app")
+        if FileManager.default.fileExists(atPath: systemApplications.path) {
+            return systemApplications
+        }
+
+        return nil
+    }
+
+    var isGhosttyAvailable: Bool {
+        ghosttyAppURL != nil
+    }
+
+    var ghosttyVersion: String? {
+        guard let appURL = ghosttyAppURL,
+              let bundle = Bundle(url: appURL) else { return nil }
+        return bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    }
+
+    var supportsGhosttyAutomation: Bool {
+        guard let version = ghosttyVersion else { return false }
+        return version.compare(Self.minimumGhosttyAutomationVersion, options: .numeric) != .orderedAscending
+    }
 
     func terminal(for sessionId: UUID, workingDirectory: String, launchClaude: Bool = true) -> LocalProcessTerminalView {
         if let existing = terminals[sessionId] {
@@ -233,6 +269,37 @@ class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         return terminal
     }
 
+    @discardableResult
+    func launchConfiguredTerminal(for sessionId: UUID, workingDirectory: String, launchClaude: Bool = true) -> Bool {
+        switch SettingsManager.shared.terminalBackend {
+        case .embedded:
+            _ = terminal(for: sessionId, workingDirectory: workingDirectory, launchClaude: launchClaude)
+            return true
+        case .ghostty:
+            return launchGhostty(workingDirectory: workingDirectory, launchClaude: launchClaude)
+        }
+    }
+
+    @discardableResult
+    func launchGhostty(workingDirectory: String, launchClaude: Bool = true) -> Bool {
+        guard supportsGhosttyAutomation else { return false }
+
+        let command = launchClaude && SettingsManager.shared.claudeIntegrationEnabled ? "claude" : nil
+        let script = ghosttyAppleScript(workingDirectory: workingDirectory, command: command)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - LocalProcessTerminalViewDelegate
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -265,6 +332,34 @@ class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM"] = "xterm-256color"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         return env.map { "\($0.key)=\($0.value)" }
+    }
+
+    private func ghosttyAppleScript(workingDirectory: String, command: String?) -> String {
+        let escapedDirectory = appleScriptString(workingDirectory)
+        var lines = [
+            "tell application \"\(Self.ghosttyApplicationName)\"",
+            "activate",
+            "set cfg to new surface configuration",
+            "set initial working directory of cfg to \"\(escapedDirectory)\""
+        ]
+
+        if let command {
+            let escapedCommand = appleScriptString(command)
+            lines.append("set command of cfg to \"\(escapedCommand)\"")
+        }
+
+        lines.append(contentsOf: [
+            "set win to new window with configuration cfg"
+        ])
+
+        lines.append("end tell")
+        return lines.joined(separator: "\n")
+    }
+
+    private func appleScriptString(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private func shellEscape(_ path: String) -> String {

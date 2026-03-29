@@ -101,8 +101,18 @@ class SessionStore {
         }
     }
 
+    func saveSessions() {
+        persistSessions()
+    }
+
     private func persistSessions() {
-        let persisted = sessions.map { PersistedSession(id: $0.id, projectName: $0.projectName, projectPath: $0.projectPath, workingDirectory: $0.workingDirectory) }
+        let persisted = sessions.map {
+            PersistedSession(
+                id: $0.id, projectName: $0.projectName, projectPath: $0.projectPath,
+                workingDirectory: $0.workingDirectory,
+                splitRoot: $0.splitRoot, focusedPaneId: $0.focusedPaneId
+            )
+        }
         if let data = try? JSONEncoder().encode(persisted) {
             UserDefaults.standard.set(data, forKey: Self.sessionsKey)
         }
@@ -113,10 +123,14 @@ class SessionStore {
         }
     }
 
-    func updateWorkingDirectory(_ id: UUID, directory: String) {
-        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        guard sessions[index].workingDirectory != directory else { return }
-        sessions[index].workingDirectory = directory
+    func updateWorkingDirectory(_ paneId: UUID, directory: String) {
+        guard let index = sessions.firstIndex(where: { $0.splitRoot.containsPane(paneId) }) else { return }
+        let oldDir = sessions[index].splitRoot.workingDirectory(for: paneId)
+        guard oldDir != directory else { return }
+        sessions[index].splitRoot = sessions[index].splitRoot.updatingWorkingDirectory(paneId, to: directory)
+        if sessions[index].focusedPaneId == paneId {
+            sessions[index].workingDirectory = directory
+        }
         persistSessions()
     }
 
@@ -184,7 +198,10 @@ class SessionStore {
             let session = sessions[i]
             guard session.projectPath != nil else { continue } // skip plain terminals
             if !detectedNames.contains(session.projectName) && session.hasStarted {
-                TerminalManager.shared.destroyTerminal(for: session.id)
+                for paneId in session.splitRoot.allPaneIds {
+                    TerminalManager.shared.destroyTerminal(for: paneId)
+                }
+                sessions[i].paneStatuses.removeAll()
                 sessions[i].hasStarted = false
             }
         }
@@ -263,46 +280,53 @@ class SessionStore {
         persistSessions()
     }
 
-    func updateTerminalStatus(_ id: UUID, status: TerminalStatus) {
-        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        if sessions[index].terminalStatus != status {
-            let previous = sessions[index].terminalStatus
-            sessions[index].terminalStatus = status
-            updateSleepPrevention()
+    func updateTerminalStatus(_ paneId: UUID, status: TerminalStatus) {
+        guard let index = sessions.firstIndex(where: { $0.splitRoot.containsPane(paneId) }) else { return }
 
-            if status == .working && previous != .working {
-                sessions[index].workingStartedAt = Date()
-            }
-            if status == .waitingForInput && previous != .waitingForInput {
+        let oldPaneStatus = sessions[index].paneStatuses[paneId] ?? .idle
+        guard oldPaneStatus != status else { return }
+
+        let previousAggregate = sessions[index].terminalStatus
+        sessions[index].paneStatuses[paneId] = status
+        let newAggregate = sessions[index].terminalStatus
+        let sessionId = sessions[index].id
+
+        updateSleepPrevention()
+
+        if status == .working && oldPaneStatus != .working {
+            sessions[index].paneWorkingStartedAt[paneId] = Date()
+        }
+
+        // Aggregate status change triggers sounds/UI
+        if newAggregate != previousAggregate {
+            if newAggregate == .waitingForInput && previousAggregate != .waitingForInput {
                 playSound(named: "waitingForInput")
-                if isPinned && !isTerminalExpanded && id == activeSessionId {
+                if isPinned && !isTerminalExpanded && sessionId == activeSessionId {
                     isTerminalExpanded = true
                     NotificationCenter.default.post(name: .NotchyExpandPanel, object: nil)
                 }
             }
-            else if status == .taskCompleted && previous != .taskCompleted {
+            else if newAggregate == .taskCompleted && previousAggregate != .taskCompleted {
                 playSound(named: "taskCompleted")
             }
-            else if status == .idle && previous == .working {
-                // Delay 3s before treating as "task completed" — Claude sometimes
-                // goes working → idle → working again briefly.
-                let workingStartedAt = sessions[index].workingStartedAt
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(3))
-                    guard let idx = self.sessions.firstIndex(where: { $0.id == id }),
-                          self.sessions[idx].terminalStatus == .idle else { return }
-                    // Only trigger taskCompleted for tasks that ran >10s
-                    if let started = workingStartedAt, Date().timeIntervalSince(started) < 10 {
-                        return
-                    }
-                    SessionStore.shared.updateTerminalStatus(id, status: .taskCompleted)
-                    // Auto-clear taskCompleted after 3 seconds
-                    try? await Task.sleep(for: .seconds(3))
-                    guard let idx2 = self.sessions.firstIndex(where: { $0.id == id }),
-                          self.sessions[idx2].terminalStatus == .taskCompleted else { return }
-                    self.sessions[idx2].terminalStatus = .idle
-                    NotificationCenter.default.post(name: .NotchyNotchStatusChanged, object: nil)
+            NotificationCenter.default.post(name: .NotchyNotchStatusChanged, object: nil)
+        }
+
+        // Per-pane working→idle delay for taskCompleted
+        if status == .idle && oldPaneStatus == .working {
+            let workingStartedAt = sessions[index].paneWorkingStartedAt[paneId]
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                guard let idx = self.sessions.firstIndex(where: { $0.id == sessionId }),
+                      self.sessions[idx].paneStatuses[paneId] == .idle else { return }
+                if let started = workingStartedAt, Date().timeIntervalSince(started) < 10 {
+                    return
                 }
+                self.updateTerminalStatus(paneId, status: .taskCompleted)
+                try? await Task.sleep(for: .seconds(3))
+                guard let idx2 = self.sessions.firstIndex(where: { $0.id == sessionId }),
+                      self.sessions[idx2].paneStatuses[paneId] == .taskCompleted else { return }
+                self.updateTerminalStatus(paneId, status: .idle)
             }
         }
     }
@@ -416,20 +440,75 @@ class SessionStore {
 
     func restartSession(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        TerminalManager.shared.destroyTerminal(for: id)
-        sessions[index].terminalStatus = .idle
+        for paneId in sessions[index].splitRoot.allPaneIds {
+            TerminalManager.shared.destroyTerminal(for: paneId)
+        }
+        sessions[index].paneStatuses.removeAll()
+        sessions[index].paneWorkingStartedAt.removeAll()
         sessions[index].generation += 1
     }
 
     func closeSession(_ id: UUID) {
         if let session = sessions.first(where: { $0.id == id }) {
             dismissedProjects[session.projectName] = false
+            for paneId in session.splitRoot.allPaneIds {
+                TerminalManager.shared.destroyTerminal(for: paneId)
+            }
         }
-        TerminalManager.shared.destroyTerminal(for: id)
         sessions.removeAll { $0.id == id }
         if activeSessionId == id {
             activeSessionId = sessions.first?.id
         }
         persistSessions()
+    }
+
+    // MARK: - Split Pane Operations
+
+    func splitFocusedPane(direction: SplitDirection) {
+        guard let index = sessions.firstIndex(where: { $0.id == activeSessionId }) else { return }
+        let paneId = sessions[index].focusedPaneId
+        let (newRoot, newPaneId) = sessions[index].splitRoot.splitting(paneId, direction: direction)
+        sessions[index].splitRoot = newRoot
+        sessions[index].focusedPaneId = newPaneId
+        persistSessions()
+    }
+
+    func closeFocusedPane() {
+        guard let index = sessions.firstIndex(where: { $0.id == activeSessionId }) else { return }
+        let paneId = sessions[index].focusedPaneId
+
+        TerminalManager.shared.destroyTerminal(for: paneId)
+        sessions[index].paneStatuses.removeValue(forKey: paneId)
+        sessions[index].paneWorkingStartedAt.removeValue(forKey: paneId)
+
+        if let newRoot = sessions[index].splitRoot.removing(paneId) {
+            sessions[index].splitRoot = newRoot
+            sessions[index].focusedPaneId = newRoot.allPaneIds.first ?? sessions[index].focusedPaneId
+            persistSessions()
+        } else {
+            closeSession(sessions[index].id)
+        }
+    }
+
+    func focusPane(_ paneId: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.splitRoot.containsPane(paneId) }) else { return }
+        sessions[index].focusedPaneId = paneId
+        TerminalManager.shared.focusTerminal(for: paneId)
+    }
+
+    func focusNextPane() {
+        guard let index = sessions.firstIndex(where: { $0.id == activeSessionId }) else { return }
+        if let next = sessions[index].splitRoot.nextPaneId(after: sessions[index].focusedPaneId) {
+            sessions[index].focusedPaneId = next
+            TerminalManager.shared.focusTerminal(for: next)
+        }
+    }
+
+    func focusPreviousPane() {
+        guard let index = sessions.firstIndex(where: { $0.id == activeSessionId }) else { return }
+        if let prev = sessions[index].splitRoot.previousPaneId(before: sessions[index].focusedPaneId) {
+            sessions[index].focusedPaneId = prev
+            TerminalManager.shared.focusTerminal(for: prev)
+        }
     }
 }

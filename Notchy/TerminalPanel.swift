@@ -9,16 +9,27 @@ class TerminalPanel: NSPanel {
     private let sessionStore: SessionStore
     private static let collapsedHeight: CGFloat = 44
     private var expandedHeight: CGFloat = 500
+    private var isAdjustingFrame = false
+
+    private static let savedWidthKey = "panelWidth"
+    private static let savedHeightKey = "panelHeight"
 
     init(sessionStore: SessionStore) {
         self.sessionStore = sessionStore
 
+        let savedWidth = CGFloat(UserDefaults.standard.double(forKey: Self.savedWidthKey))
+        let savedHeight = CGFloat(UserDefaults.standard.double(forKey: Self.savedHeightKey))
+        let width = savedWidth > 0 ? savedWidth : 720
+        let height = savedHeight > 0 ? savedHeight : 400
+
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: true
         )
+
+        expandedHeight = height
 
         isFloatingPanel = true
         level = .floating
@@ -65,6 +76,38 @@ class TerminalPanel: NSPanel {
             name: .NotchyExpandPanel,
             object: nil
         )
+    }
+
+    override func setFrame(_ frameRect: NSRect, display displayFlag: Bool, animate animateFlag: Bool) {
+        var adjusted = frameRect
+
+        // Center horizontally when width changes (grow equally from both sides)
+        if !isAdjustingFrame && frame.width > 0 && adjusted.width != frame.width {
+            isAdjustingFrame = true
+            let centerX = frame.midX
+            adjusted.origin.x = centerX - adjusted.width / 2
+            if let screen = screen ?? NSScreen.main {
+                let visibleFrame = screen.visibleFrame
+                adjusted.origin.x = max(visibleFrame.minX, adjusted.origin.x)
+                adjusted.origin.x = min(visibleFrame.maxX - adjusted.width, adjusted.origin.x)
+            }
+            super.setFrame(adjusted, display: displayFlag, animate: animateFlag)
+            persistSize()
+            isAdjustingFrame = false
+            return
+        }
+
+        super.setFrame(adjusted, display: displayFlag, animate: animateFlag)
+        if !isAdjustingFrame {
+            persistSize()
+        }
+    }
+
+    private func persistSize() {
+        guard sessionStore.isTerminalExpanded, frame.height > Self.collapsedHeight else { return }
+        UserDefaults.standard.set(Double(frame.width), forKey: Self.savedWidthKey)
+        UserDefaults.standard.set(Double(frame.height), forKey: Self.savedHeightKey)
+        expandedHeight = frame.height
     }
 
     func showPanel(below rect: NSRect) {
@@ -157,12 +200,40 @@ class TerminalPanel: NSPanel {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "s" {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let chars = event.charactersIgnoringModifiers ?? ""
+
+        if mods == .command && chars == "s" {
             sessionStore.createCheckpointForActiveSession()
             return true
         }
-        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "t" {
+        if mods == .command && chars == "t" {
             sessionStore.createQuickSession()
+            return true
+        }
+        // Cmd+D → split right
+        if mods == .command && chars == "d" {
+            sessionStore.splitFocusedPane(direction: .horizontal)
+            return true
+        }
+        // Cmd+Shift+D → split down
+        if mods == [.command, .shift] && chars == "d" {
+            sessionStore.splitFocusedPane(direction: .vertical)
+            return true
+        }
+        // Cmd+Shift+W → close focused pane
+        if mods == [.command, .shift] && chars == "w" {
+            sessionStore.closeFocusedPane()
+            return true
+        }
+        // Cmd+] → next pane
+        if mods == .command && chars == "]" {
+            sessionStore.focusNextPane()
+            return true
+        }
+        // Cmd+[ → previous pane
+        if mods == .command && chars == "[" {
+            sessionStore.focusPreviousPane()
             return true
         }
         return super.performKeyEquivalent(with: event)

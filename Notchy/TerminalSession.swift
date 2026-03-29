@@ -19,24 +19,42 @@ struct TerminalSession: Identifiable {
     var projectPath: String?
     var workingDirectory: String
     var hasStarted: Bool
-    var terminalStatus: TerminalStatus
     var generation: Int
     /// Whether the user has ever manually selected this tab
     var hasBeenSelected: Bool
     let createdAt: Date
-    /// When the session most recently entered the .working state
-    var workingStartedAt: Date?
+
+    // Split pane support
+    var splitRoot: SplitNode
+    var focusedPaneId: UUID
+    var paneStatuses: [UUID: TerminalStatus] = [:]
+    var paneWorkingStartedAt: [UUID: Date] = [:]
+
+    /// Aggregate status across all panes
+    var terminalStatus: TerminalStatus {
+        let statuses = Array(paneStatuses.values)
+        if statuses.isEmpty { return .idle }
+        if statuses.contains(.working) { return .working }
+        if statuses.contains(.waitingForInput) { return .waitingForInput }
+        if statuses.contains(.taskCompleted) { return .taskCompleted }
+        if statuses.contains(.interrupted) { return .interrupted }
+        return .idle
+    }
 
     init(projectName: String, projectPath: String? = nil, workingDirectory: String? = nil, started: Bool = false) {
         self.id = UUID()
         self.projectName = projectName
         self.projectPath = projectPath
-        self.workingDirectory = workingDirectory ?? projectPath ?? NSHomeDirectory()
+        let dir = workingDirectory ?? projectPath ?? NSHomeDirectory()
+        self.workingDirectory = dir
         self.hasStarted = started
-        self.terminalStatus = .idle
         self.generation = 0
-        self.hasBeenSelected = started // if started immediately (e.g. "+" button), mark as selected
+        self.hasBeenSelected = started
         self.createdAt = Date()
+
+        let paneId = UUID()
+        self.splitRoot = .pane(id: paneId, workingDirectory: dir)
+        self.focusedPaneId = paneId
     }
 
     /// Restore a session from persisted data
@@ -46,10 +64,19 @@ struct TerminalSession: Identifiable {
         self.projectPath = persisted.projectPath
         self.workingDirectory = persisted.workingDirectory
         self.hasStarted = false
-        self.terminalStatus = .idle
         self.generation = 0
         self.hasBeenSelected = false
         self.createdAt = Date()
+
+        if let root = persisted.splitRoot {
+            self.splitRoot = root
+            self.focusedPaneId = persisted.focusedPaneId ?? root.allPaneIds.first ?? UUID()
+        } else {
+            // Backward compat: old data without splits
+            let paneId = UUID()
+            self.splitRoot = .pane(id: paneId, workingDirectory: persisted.workingDirectory)
+            self.focusedPaneId = paneId
+        }
     }
 }
 
@@ -59,4 +86,6 @@ struct PersistedSession: Codable {
     let projectName: String
     let projectPath: String?
     let workingDirectory: String
+    let splitRoot: SplitNode?
+    let focusedPaneId: UUID?
 }

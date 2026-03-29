@@ -47,6 +47,7 @@ struct GeneralTab: View {
                 .onChange(of: settings.showNotch) { _, newValue in
                     onShowNotchChanged?(newValue)
                 }
+            Toggle("Open panel on notch hover", isOn: $settings.hoverToOpenEnabled)
             Toggle("Enable sounds", isOn: $settings.soundsEnabled)
         }
         .padding(20)

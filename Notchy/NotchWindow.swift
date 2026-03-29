@@ -16,6 +16,8 @@ class NotchWindow: NSPanel {
     /// Closure to check if the main panel is currently visible.
     /// When the panel is visible, the notch stays in hover-grown size.
     var isPanelVisible: (() -> Bool)?
+    /// Closure to check whether hover-open is currently enabled.
+    var isHoverEnabled: (() -> Bool)?
 
     /// Detected notch dimensions (updated on screen change).
     private var notchWidth: CGFloat = 180
@@ -92,6 +94,7 @@ class NotchWindow: NSPanel {
     // MARK: - Drag destination (treat drag-over like hover)
 
     func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard isHoverEnabled?() ?? true else { return [] }
         onHover?()
         return .generic
     }
@@ -322,6 +325,15 @@ class NotchWindow: NSPanel {
     }
 
     private func checkMouse() {
+        let hoverEnabled = isHoverEnabled?() ?? true
+        if !hoverEnabled {
+            if isHovered {
+                isHovered = false
+                hoverShrink()
+            }
+            return
+        }
+
         let mouseLocation = NSEvent.mouseLocation
 
         // Check the notch area itself

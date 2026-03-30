@@ -4,6 +4,7 @@ import SwiftTerm
 class ClickThroughTerminalView: LocalProcessTerminalView {
     var sessionId: UUID?
     private var keyMonitor: Any?
+    private var scrollMonitor: Any?
     private var statusDebounceWork: DispatchWorkItem?
     private static let statusQueue = DispatchQueue(label: "com.notchy.status", qos: .utility)
 
@@ -13,16 +14,21 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
         installArrowKeyMonitor()
+        installScrollMonitor()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         registerForDraggedTypes([.fileURL])
         installArrowKeyMonitor()
+        installScrollMonitor()
     }
 
     deinit {
         if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = scrollMonitor {
             NSEvent.removeMonitor(monitor)
         }
     }
@@ -32,6 +38,18 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
     private func installArrowKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.window?.firstResponder === self else { return event }
+
+            // Shift+Enter → send newline without submitting (for multi-line input)
+            if event.keyCode == 36 && event.modifierFlags.contains(.shift) {
+                self.send(txt: "\n")
+                return nil
+            }
+
+            // Cmd+Backspace → kill line (send Ctrl-U to clear from cursor to start of line)
+            if event.keyCode == 51 && event.modifierFlags.contains(.command) {
+                self.send(txt: "\u{15}")
+                return nil
+            }
 
             let arrowCode: String?
             switch event.keyCode {
@@ -53,6 +71,44 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
                 if mods.contains(.option) { modifier += 2 }
                 if mods.contains(.control) { modifier += 4 }
                 self.send(txt: "\u{1b}[1;\(modifier)\(code)")
+            }
+            return nil // consume the event
+        }
+    }
+
+    /// Intercept scroll wheel events when the terminal is in alternate screen mode.
+    /// - Mouse mode ON: forward as mouse button 4/5 presses (TUI handles scrolling)
+    /// - Mouse mode OFF: send UP/DOWN arrow key sequences (like iTerm2's
+    ///   "Send scroll events to alternate screen" option)
+    private func installScrollMonitor() {
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self = self, self.window?.firstResponder === self else { return event }
+
+            let terminal = self.getTerminal()
+            guard terminal.isCurrentBufferAlternate else { return event }
+            guard event.deltaY != 0 else { return event }
+
+            let lines = max(1, Int(abs(event.deltaY)))
+            let count = min(lines, 5)
+
+            if terminal.mouseMode != .off {
+                // Mouse mode: forward as mouse button 4 (scroll up) / 5 (scroll down)
+                let button = event.deltaY > 0 ? 4 : 5
+                let flags = terminal.encodeButton(
+                    button: button, release: false,
+                    shift: event.modifierFlags.contains(.shift),
+                    meta: event.modifierFlags.contains(.option),
+                    control: event.modifierFlags.contains(.control)
+                )
+                for _ in 0..<count {
+                    terminal.sendEvent(buttonFlags: flags, x: 0, y: 0)
+                }
+            } else {
+                // No mouse mode: send arrow key sequences so the TUI can scroll
+                let arrow = event.deltaY > 0 ? "A" : "B" // A = Up, B = Down
+                for _ in 0..<count {
+                    self.send(txt: "\u{1b}[\(arrow)")
+                }
             }
             return nil // consume the event
         }
@@ -205,10 +261,16 @@ class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         terminal.sessionId = sessionId
         terminal.processDelegate = self
 
-        // Match macOS Terminal default font size
-        terminal.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        terminal.nativeBackgroundColor = NSColor(white: 0.1, alpha: 1.0)
-        terminal.nativeForegroundColor = NSColor(white: 0.9, alpha: 1.0)
+        // Use Nerd Font for Unicode/Powerline glyph support, fall back to system mono
+        if let nerdFont = NSFont(name: "MesloLGSDZNF-Regular", size: 13) {
+            terminal.font = nerdFont
+        } else if let nerdFont = NSFont(name: "MesloLGLNF-Regular", size: 13) {
+            terminal.font = nerdFont
+        } else {
+            terminal.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        }
+        terminal.nativeBackgroundColor = NSColor(white: 0.05, alpha: 0.6)
+        terminal.nativeForegroundColor = NSColor(white: 0.95, alpha: 1.0)
 
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let environment = buildEnvironment()

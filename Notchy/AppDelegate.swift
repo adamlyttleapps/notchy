@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: TerminalPanel!
@@ -9,7 +10,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverHideTimer: Timer?
     private var hoverGlobalMonitor: Any?
     private var hoverLocalMonitor: Any?
-    private var hotkeyMonitor: Any?
     /// Whether the panel was opened via notch hover (vs status item click)
     private var panelOpenedViaHover = false
     private let hoverMargin: CGFloat = 15
@@ -29,8 +29,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(named: "menuIcon") //NSImage(systemSymbolName: "terminal", accessibilityDescription: "Notchy")
-            button.image?.isTemplate = true  // lets macOS handle light/dark mode
+            button.image = NSImage(named: "menuIcon")
+            button.image?.isTemplate = true
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -39,19 +39,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPanel() {
         panel = TerminalPanel(sessionStore: sessionStore)
-        // When the panel hides for any reason, clean up hover tracking
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification,
-            object: panel,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self, !self.panel.isVisible else { return }
-            self.notchWindow?.endHover()
-            self.panelOpenedViaHover = false
-            self.stopHoverTracking()
-        }
-        // When panel becomes key (user clicked on it), stop hover tracking
-        // since resign-key will handle hiding from here
         NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: panel,
@@ -61,8 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if self.panelOpenedViaHover {
                 self.panelOpenedViaHover = false
                 self.stopHoverTracking()
-                // Panel is now in "click mode" — shrink the notch hover state
-                // since hover tracking is no longer managing it
                 self.notchWindow?.endHover()
             }
         }
@@ -73,31 +58,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.notchHovered()
         }
         notchWindow?.isPanelVisible = { [weak self] in
-            self?.panel.isVisible ?? false
+            self?.panel.isShown ?? false
         }
     }
 
     private func setupHotkey() {
-        // Global monitor: fires when another app is focused (backtick = keyCode 50)
-        hotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 50,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.function).isEmpty
-            else { return }
-            DispatchQueue.main.async { self?.togglePanel() }
+        HotkeyManager.shared.onHotkey = { [weak self] in
+            self?.togglePanel()
+        }
+        HotkeyManager.shared.setup()
+
+        // Re-check when app becomes active (user may have just granted permission in System Settings)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            HotkeyManager.shared.recheckIfNeeded()
         }
     }
 
     private func notchHovered() {
-        guard !panel.isVisible else { return }
-        showPanelBelowNotch()
+        guard !panel.isShown else { return }
+        panel.showPanel()
         panelOpenedViaHover = true
         startHoverTracking()
         sessionStore.detectAndSwitchAsync()
-    }
-
-    private func showPanelBelowNotch() {
-        guard let screen = NSScreen.builtIn else { return }
-        panel.showPanelCentered(on: screen)
     }
 
     // MARK: - Hover-to-hide tracking
@@ -127,7 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkHoverBounds() {
-        guard panel.isVisible, panelOpenedViaHover, !sessionStore.isPinned, !sessionStore.isShowingDialog else {
+        guard panel.isShown, panelOpenedViaHover, !sessionStore.isShowingDialog else {
             cancelHoverHide()
             return
         }
@@ -147,11 +133,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard hoverHideTimer == nil else { return }
         hoverHideTimer = Timer.scheduledTimer(withTimeInterval: hoverHideDelay, repeats: false) { [weak self] _ in
             guard let self else { return }
-            // Re-check one more time before hiding (mouse may have returned)
             let mouse = NSEvent.mouseLocation
             let inNotch = self.notchWindow?.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse) ?? false
             let inPanel = self.panel.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse)
-            if !inNotch && !inPanel && !self.sessionStore.isPinned && !self.sessionStore.isShowingDialog {
+            if !inNotch && !inPanel && !self.sessionStore.isShowingDialog {
                 self.panel.hidePanel()
                 self.notchWindow?.endHover()
                 self.panelOpenedViaHover = false
@@ -169,18 +154,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         showContextMenu()
     }
 
-    private func togglePanel() {
-        if panel.isVisible {
+    func togglePanel() {
+        guard !panel.isAnimating else { return }
+        if panel.isShown {
             panel.hidePanel()
             notchWindow?.endHover()
             panelOpenedViaHover = false
             stopHoverTracking()
         } else {
             panelOpenedViaHover = false
-            // Show panel immediately
-            showPanelBelowStatusItem()
-
-            // Then detect projects in background
+            panel.showPanel()
             sessionStore.detectAndSwitchAsync()
         }
     }
@@ -237,7 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectSession(_ sender: NSMenuItem) {
         guard let sessionId = sender.representedObject as? UUID else { return }
         sessionStore.selectSession(sessionId)
-        showPanelBelowStatusItem()
+        panel.showPanel()
     }
 
     @objc private func createCheckpoint(_ sender: NSMenuItem) {
@@ -268,16 +251,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func createNewSession() {
         sessionStore.createQuickSession()
-        showPanelBelowStatusItem()
-    }
-
-    private func showPanelBelowStatusItem() {
-        if let button = statusItem.button,
-           let window = button.window {
-            let buttonRect = button.convert(button.bounds, to: nil)
-            let screenRect = window.convertToScreen(buttonRect)
-            panel.showPanel(below: screenRect)
-        }
+        panel.showPanel()
     }
 
 }

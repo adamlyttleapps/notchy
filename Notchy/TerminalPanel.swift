@@ -7,15 +7,15 @@ class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
 
 class TerminalPanel: NSPanel {
     private let sessionStore: SessionStore
-    private static let collapsedHeight: CGFloat = 44
-    private var expandedHeight: CGFloat = 500
+    private(set) var isAnimating = false
+    private(set) var isShown = false
 
     init(sessionStore: SessionStore) {
         self.sessionStore = sessionStore
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
-            styleMask: [.borderless, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: true
         )
@@ -28,27 +28,48 @@ class TerminalPanel: NSPanel {
         isOpaque = false
         animationBehavior = .none
         hidesOnDeactivate = false
-        minSize = NSSize(width: 480, height: 300)
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let contentView = PanelContentView(
+        // Base layer: NSVisualEffectView for frosted glass blur
+        let visualEffect = NSVisualEffectView()
+        visualEffect.material = .hudWindow
+        visualEffect.blendingMode = .behindWindow
+        visualEffect.state = .active
+        visualEffect.wantsLayer = true
+        visualEffect.layer?.cornerRadius = 8
+        visualEffect.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
+                                              .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        visualEffect.layer?.masksToBounds = true
+
+        let swiftUIContent = PanelContentView(
             sessionStore: sessionStore,
             onClose: { [weak self] in self?.hidePanel() },
             onToggleExpand: { [weak self] in self?.handleToggleExpand() }
         )
-        let hosting = ClickThroughHostingView(rootView: contentView)
-        self.contentView = hosting
+        let hosting = ClickThroughHostingView(rootView: swiftUIContent)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidResignKey),
-            name: NSWindow.didResignKeyNotification,
-            object: self
-        )
+        visualEffect.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: visualEffect.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
+        ])
+
+        self.contentView = visualEffect
 
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(windowDidBecomeKey),
             name: NSWindow.didBecomeKeyNotification,
+            object: self
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidResignKey),
+            name: NSWindow.didResignKeyNotification,
             object: self
         )
 
@@ -67,54 +88,92 @@ class TerminalPanel: NSPanel {
         )
     }
 
-    func showPanel(below rect: NSRect) {
-        if let screen = NSScreen.main {
-            let panelWidth = frame.width
-            let panelHeight = frame.height
-            let x = rect.midX - panelWidth / 2
-            let y = screen.visibleFrame.maxY - panelHeight
-            setFrameOrigin(NSPoint(x: x, y: y))
+    func showPanel() {
+        guard !isAnimating, !isShown else {
+            if isShown { makeKeyAndOrderFront(nil) }
+            return
         }
-        makeKeyAndOrderFront(nil)
-        NotificationCenter.default.post(name: .NotchyNotchStatusChanged, object: nil)
-    }
+        guard let screen = NSScreen.main else { return }
 
-    func showPanelCentered(on screen: NSScreen) {
+        let panelHeight = SettingsManager.shared.panelHeight
+        let panelWidth = frame.width  // preserve current width
         let screenFrame = screen.frame
-        let panelWidth = frame.width
-        let panelHeight = frame.height
-        let x = screenFrame.midX - panelWidth / 2
-        let y = screenFrame.maxY - panelHeight
-        setFrameOrigin(NSPoint(x: x, y: y))
+        let visibleTop = screen.visibleFrame.maxY  // bottom of menu bar
+        let centerX = screenFrame.midX - panelWidth / 2
+
+        // Start hidden: tucked behind the menu bar/notch
+        let hiddenFrame = NSRect(
+            x: centerX,
+            y: visibleTop,
+            width: panelWidth,
+            height: panelHeight
+        )
+        setFrame(hiddenFrame, display: false)
         makeKeyAndOrderFront(nil)
+
+        // Animate sliding down: top edge anchored at bottom of menu bar
+        let shownFrame = NSRect(
+            x: centerX,
+            y: visibleTop - panelHeight,
+            width: panelWidth,
+            height: panelHeight
+        )
+
+        isAnimating = true
+        isShown = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.allowsImplicitAnimation = true
+            self.animator().setFrame(shownFrame, display: true)
+        }, completionHandler: { [weak self] in
+            self?.isAnimating = false
+        })
+
         NotificationCenter.default.post(name: .NotchyNotchStatusChanged, object: nil)
     }
 
     func hidePanel() {
-        orderOut(nil)
+        guard !isAnimating, isShown else { return }
+        guard let screen = NSScreen.main else {
+            orderOut(nil)
+            isShown = false
+            return
+        }
+
+        let visibleTop = screen.visibleFrame.maxY
+        // Slide up behind the menu bar/notch
+        let hiddenFrame = NSRect(
+            x: frame.origin.x,
+            y: visibleTop,
+            width: frame.width,
+            height: frame.height
+        )
+
+        isAnimating = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            ctx.allowsImplicitAnimation = true
+            self.animator().setFrame(hiddenFrame, display: true)
+        }, completionHandler: { [weak self] in
+            self?.orderOut(nil)
+            self?.isAnimating = false
+            self?.isShown = false
+        })
     }
 
-    private func handleToggleExpand() {
-        updateOpacity()
-        if sessionStore.isTerminalExpanded {
-            // Expanding: restore saved height, anchor top edge
-            let newHeight = expandedHeight
-            var newFrame = frame
-            newFrame.origin.y -= (newHeight - frame.height)
-            newFrame.size.height = newHeight
-            minSize = NSSize(width: 480, height: 300)
-            setFrame(newFrame, display: true, animate: false)
-        } else {
-            // Collapsing: save current height, shrink to tab bar only
-            expandedHeight = frame.height
-            let newHeight = Self.collapsedHeight
-            var newFrame = frame
-            newFrame.origin.y += (frame.height - newHeight)
-            newFrame.size.height = newHeight
-            minSize = NSSize(width: 480, height: Self.collapsedHeight)
-            setFrame(newFrame, display: true, animate: false)
-        }
+    /// Reposition the panel to match current screen geometry (e.g. after resize drag).
+    func repositionToScreen() {
+        guard isShown, let screen = NSScreen.main else { return }
+        let visibleTop = screen.visibleFrame.maxY
+        var newFrame = frame
+        newFrame.origin.x = screen.frame.midX - newFrame.width / 2
+        newFrame.origin.y = visibleTop - newFrame.height
+        setFrame(newFrame, display: true)
     }
+
+    private func handleToggleExpand() {}
 
     @objc private func handleHidePanel() {
         hidePanel()
@@ -126,31 +185,18 @@ class TerminalPanel: NSPanel {
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
         sessionStore.panelDidBecomeKey()
-        updateOpacity()
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
+        // Auto-hide when user clicks away, unless pinned or showing a dialog
         if !sessionStore.isPinned && !sessionStore.isShowingDialog && attachedSheet == nil && childWindows?.isEmpty ?? true {
             hidePanel()
         }
-        updateOpacity()
-    }
-
-    private func updateOpacity() {
-        let collapsed = !sessionStore.isTerminalExpanded
-        let unfocused = !isKeyWindow
-        // Collapsed + unfocused: dim the whole window
-        alphaValue = (collapsed && unfocused) ? 0.8 : 1.0
-        // Expanded + unfocused: clear window background so SwiftUI chrome
-        // transparency shows through (terminal stays opaque via its own view)
-        backgroundColor = .clear
     }
 
     override func sendEvent(_ event: NSEvent) {
         let wasKey = isKeyWindow
         super.sendEvent(event)
-        // When the panel wasn't key, the first click just activates the window.
-        // Re-send it so SwiftUI controls (tabs, buttons) process the click too.
         if !wasKey && event.type == .leftMouseDown {
             super.sendEvent(event)
         }
@@ -163,6 +209,15 @@ class TerminalPanel: NSPanel {
         }
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "t" {
             sessionStore.createQuickSession()
+            return true
+        }
+        // Ctrl+Tab / Ctrl+Shift+Tab: cycle tabs
+        if event.keyCode == 48 && event.modifierFlags.contains(.control) {
+            if event.modifierFlags.contains(.shift) {
+                sessionStore.selectPreviousSession()
+            } else {
+                sessionStore.selectNextSession()
+            }
             return true
         }
         return super.performKeyEquivalent(with: event)

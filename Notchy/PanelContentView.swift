@@ -23,9 +23,83 @@ struct WindowDragArea: NSViewRepresentable {
         override func mouseDown(with event: NSEvent) {
             if event.clickCount == 2 {
                 onDoubleClick?()
-            } else {
-                window?.performDrag(with: event)
             }
+        }
+    }
+}
+
+/// Drag handle at the bottom of the quake panel for resizing height.
+struct ResizeHandleView: NSViewRepresentable {
+    func makeNSView(context: Context) -> ResizeHandleNSView {
+        ResizeHandleNSView()
+    }
+
+    func updateNSView(_ nsView: ResizeHandleNSView, context: Context) {}
+
+    class ResizeHandleNSView: NSView {
+        private var initialMouseY: CGFloat = 0
+        private var initialPanelFrame: NSRect = .zero
+        private let grabberLayer = CAShapeLayer()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            setupGrabber()
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            wantsLayer = true
+            setupGrabber()
+        }
+
+        private func setupGrabber() {
+            grabberLayer.fillColor = NSColor.white.withAlphaComponent(0.3).cgColor
+            layer?.addSublayer(grabberLayer)
+        }
+
+        override func layout() {
+            super.layout()
+            let pillWidth: CGFloat = 32
+            let pillHeight: CGFloat = 4
+            let pillRect = CGRect(
+                x: (bounds.width - pillWidth) / 2,
+                y: (bounds.height - pillHeight) / 2,
+                width: pillWidth,
+                height: pillHeight
+            )
+            grabberLayer.path = CGPath(roundedRect: pillRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeUpDown)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            initialMouseY = NSEvent.mouseLocation.y
+            initialPanelFrame = window?.frame ?? .zero
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let window = window, let screen = window.screen ?? NSScreen.main else { return }
+            let currentMouseY = NSEvent.mouseLocation.y
+            let deltaY = initialMouseY - currentMouseY
+            let newHeight = max(200, min(initialPanelFrame.height + deltaY, screen.visibleFrame.height))
+            let visibleTop = screen.visibleFrame.maxY
+            // Keep the panel's top edge anchored at the bottom of the menu bar,
+            // and preserve horizontal position (centered width).
+            let newFrame = NSRect(
+                x: initialPanelFrame.origin.x,
+                y: visibleTop - newHeight,
+                width: initialPanelFrame.width,
+                height: newHeight
+            )
+            window.setFrame(newFrame, display: true)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard let window = window else { return }
+            SettingsManager.shared.panelHeight = window.frame.height
         }
     }
 }
@@ -48,10 +122,10 @@ struct PanelContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Black top border — separate element so it pushes content down
+            // Top spacing so content clears the rounded corner area
             Rectangle()
-                .fill(Color.black)
-                .frame(height: 10)
+                .fill(Color.clear)
+                .frame(height: 6)
 
             // Top bar: tabs + controls
             HStack(spacing: 8) {
@@ -111,7 +185,7 @@ struct PanelContentView: View {
                 .padding(.trailing, -10)
             }
             .padding(.horizontal, 12)
-            .background(Color(nsColor: NSColor(white: 0.14, alpha: 1.0)).opacity(chromeBackgroundOpacity))
+            .background(Color.white.opacity(0.06))
 
             if sessionStore.isTerminalExpanded, sessionStore.checkpointStatus != nil || sessionStore.lastCheckpoint != nil {
                 HStack(spacing: 6) {
@@ -177,7 +251,7 @@ struct PanelContentView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color(nsColor: NSColor(white: 0.18, alpha: 1.0)).opacity(chromeBackgroundOpacity))
+                .background(Color.white.opacity(0.04))
                 .foregroundColor(.white.opacity(0.8))
             }
 
@@ -223,10 +297,13 @@ struct PanelContentView: View {
                     placeholderView("Select a project to begin")
                 }
             }
+
+            // Resize handle at bottom edge
+            ResizeHandleView()
+                .frame(height: 8)
+                .background(Color.white.opacity(0.04))
         }
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8.5, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 8.5))
-        .background(Color(nsColor: NSColor(white: 0.1, alpha: 1.0)).opacity(chromeBackgroundOpacity))
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8.5, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 8.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .onAppear {
             sessionStore.refreshLastCheckpoint()
         }
@@ -262,7 +339,7 @@ struct PanelContentView: View {
     }
 
     private func placeholderView(_ message: String) -> some View {
-        Color(nsColor: NSColor(white: 0.1, alpha: 1.0))
+        Color.clear
             .overlay {
                 Text(message)
                     .font(.system(size: 13))

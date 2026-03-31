@@ -212,6 +212,22 @@ class SessionStore {
         return false
     }
 
+    func selectNextSession() {
+        guard sessions.count > 1,
+              let currentIndex = sessions.firstIndex(where: { $0.id == activeSessionId })
+        else { return }
+        let nextIndex = (currentIndex + 1) % sessions.count
+        selectSession(sessions[nextIndex].id)
+    }
+
+    func selectPreviousSession() {
+        guard sessions.count > 1,
+              let currentIndex = sessions.firstIndex(where: { $0.id == activeSessionId })
+        else { return }
+        let prevIndex = (currentIndex - 1 + sessions.count) % sessions.count
+        selectSession(sessions[prevIndex].id)
+    }
+
     /// Select a tab — auto-starts the terminal only if the project's Xcode instance is active
     func selectSession(_ id: UUID) {
         activeSessionId = id

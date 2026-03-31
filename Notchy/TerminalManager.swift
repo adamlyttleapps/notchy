@@ -5,6 +5,8 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
     var sessionId: UUID?
     private var keyMonitor: Any?
     private var scrollMonitor: Any?
+    private var mouseUpMonitor: Any?
+    private var dragMonitor: Any?
     private var statusDebounceWork: DispatchWorkItem?
     private static let statusQueue = DispatchQueue(label: "com.notchy.status", qos: .utility)
 
@@ -15,6 +17,8 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
         registerForDraggedTypes([.fileURL])
         installArrowKeyMonitor()
         installScrollMonitor()
+        installMouseUpMonitor()
+        installDragMonitor()
     }
 
     required init?(coder: NSCoder) {
@@ -22,6 +26,8 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
         registerForDraggedTypes([.fileURL])
         installArrowKeyMonitor()
         installScrollMonitor()
+        installMouseUpMonitor()
+        installDragMonitor()
     }
 
     deinit {
@@ -29,6 +35,12 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
             NSEvent.removeMonitor(monitor)
         }
         if let monitor = scrollMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = mouseUpMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = dragMonitor {
             NSEvent.removeMonitor(monitor)
         }
     }
@@ -80,19 +92,22 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
     /// - Mouse mode ON: forward as mouse button 4/5 presses (TUI handles scrolling)
     /// - Mouse mode OFF: send UP/DOWN arrow key sequences (like iTerm2's
     ///   "Send scroll events to alternate screen" option)
+    /// Intercept scroll wheel events and forward them appropriately:
+    /// - Mouse mode ON (any buffer): forward as mouse button 4/5 to the app (tmux, Claude Code, etc.)
+    /// - Mouse mode OFF + alternate buffer: send UP/DOWN arrow key sequences
+    /// - Mouse mode OFF + normal buffer: let SwiftTerm handle scrollback
     private func installScrollMonitor() {
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self = self, self.window?.firstResponder === self else { return event }
 
             let terminal = self.getTerminal()
-            guard terminal.isCurrentBufferAlternate else { return event }
             guard event.deltaY != 0 else { return event }
 
             let lines = max(1, Int(abs(event.deltaY)))
             let count = min(lines, 5)
 
             if terminal.mouseMode != .off {
-                // Mouse mode: forward as mouse button 4 (scroll up) / 5 (scroll down)
+                // Mouse mode ON (tmux, Claude Code, etc.): forward as mouse button 4/5
                 let button = event.deltaY > 0 ? 4 : 5
                 let flags = terminal.encodeButton(
                     button: button, release: false,
@@ -103,14 +118,74 @@ class ClickThroughTerminalView: LocalProcessTerminalView {
                 for _ in 0..<count {
                     terminal.sendEvent(buttonFlags: flags, x: 0, y: 0)
                 }
-            } else {
-                // No mouse mode: send arrow key sequences so the TUI can scroll
-                let arrow = event.deltaY > 0 ? "A" : "B" // A = Up, B = Down
+                return nil
+            } else if terminal.isCurrentBufferAlternate {
+                // Alt buffer without mouse mode: send arrow keys
+                let arrow = event.deltaY > 0 ? "A" : "B"
                 for _ in 0..<count {
                     self.send(txt: "\u{1b}[\(arrow)")
                 }
+                return nil
             }
-            return nil // consume the event
+
+            // Normal buffer, no mouse mode: let SwiftTerm handle scrollback
+            return event
+        }
+    }
+
+    /// Copy selected text to clipboard automatically when the user finishes
+    /// a mouse selection (block-to-copy / copy-on-select).
+    private func installMouseUpMonitor() {
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            guard let self = self, self.window?.firstResponder === self else { return event }
+
+            // Defer to let SwiftTerm finalize the selection state after its own mouseUp handler
+            DispatchQueue.main.async {
+                guard self.selectionActive,
+                      let text = self.getSelection(),
+                      !text.isEmpty
+                else { return }
+
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+            }
+
+            return event // pass through — don't consume mouseUp
+        }
+    }
+
+    /// Forward mouse drag events to the terminal when mouse mode is active.
+    /// SwiftTerm's mouseDragged silently drops drag events in .vt200 mode
+    /// (what tmux uses), preventing tmux from performing text selection.
+    private func installDragMonitor() {
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDragged) { [weak self] event in
+            guard let self = self, self.window?.firstResponder === self else { return event }
+
+            let terminal = self.getTerminal()
+            guard terminal.mouseMode != .off else { return event }
+
+            let point = self.convert(event.locationInWindow, from: nil)
+            let cols = terminal.cols
+            let rows = terminal.rows
+            guard cols > 0 && rows > 0 else { return event }
+
+            let cellWidth = self.bounds.width / CGFloat(cols)
+            let cellHeight = self.bounds.height / CGFloat(rows)
+            let col = max(0, min(cols - 1, Int(point.x / cellWidth)))
+            let row = max(0, min(rows - 1, Int((self.bounds.height - point.y) / cellHeight)))
+
+            let flags = terminal.encodeButton(
+                button: 0, release: false,
+                shift: event.modifierFlags.contains(.shift),
+                meta: event.modifierFlags.contains(.option),
+                control: event.modifierFlags.contains(.control)
+            )
+            terminal.sendMotion(
+                buttonFlags: flags, x: col, y: row,
+                pixelX: Int(point.x), pixelY: Int(self.bounds.height - point.y)
+            )
+            return nil
         }
     }
 

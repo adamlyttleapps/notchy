@@ -289,12 +289,8 @@ class NotchWindow: NSPanel {
             // Notch spans the gap between the two auxiliary areas
             notchWidth = right.minX - left.maxX
             notchHeight = screen.frame.maxY - min(left.minY, right.minY)
-        } else {
-            // No notch (external display, older Mac) — use sensible defaults
-            let menuBarHeight = screen.frame.maxY - screen.visibleFrame.maxY
-            notchWidth = 180
-            notchHeight = max(menuBarHeight, 25)
         }
+        // builtIn already guarantees hasNotch, so no fallback needed
     }
 
     // MARK: - Positioning
@@ -439,12 +435,24 @@ class NotchWindow: NSPanel {
 // MARK: - NSScreen helper
 
 extension NSScreen {
-    /// Returns the built-in display (the one with the notch), or the main screen as fallback.
+    /// Whether this screen has a physical notch (auxiliary areas flanking the camera housing).
+    @available(macOS 12.0, *)
+    var hasNotch: Bool {
+        auxiliaryTopLeftArea != nil && auxiliaryTopRightArea != nil
+    }
+
+    /// Returns the built-in display **only if it has a notch**. Returns `nil` otherwise
+    /// (e.g. clamshell mode with an external monitor, older MacBooks, Mac mini/Pro).
     static var builtIn: NSScreen? {
-        screens.first { screen in
+        guard let screen = screens.first(where: { screen in
             let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
             return CGDisplayIsBuiltin(id) != 0
-        } ?? main
+        }) else { return nil }
+
+        if #available(macOS 12.0, *) {
+            return screen.hasNotch ? screen : nil
+        }
+        return nil
     }
 }
 

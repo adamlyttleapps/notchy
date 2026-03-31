@@ -15,6 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let hoverMargin: CGFloat = 15
     private let hoverHideDelay: TimeInterval = 0.06
 
+    private var screenObserver: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupPanel()
@@ -22,8 +24,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             setupNotchWindow()
         }
         setupHotkey()
+        observeScreenChanges()
         // Detect in background so launch isn't blocked
         sessionStore.detectAllXcodeProjectsAsync()
+    }
+
+    /// Show or hide the notch window when displays change (e.g. dock/undock external monitor).
+    private func observeScreenChanges() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.settings.showNotch else { return }
+            if NSScreen.builtIn != nil {
+                // A screen with a notch is available — ensure the window exists
+                if self.notchWindow == nil { self.setupNotchWindow() }
+            } else {
+                // No notch screen — tear down
+                self.notchWindow?.orderOut(nil)
+                self.notchWindow = nil
+            }
+        }
     }
 
     private func setupStatusItem() {

@@ -17,6 +17,9 @@ class NotchWindow: NSPanel {
     /// When the panel is visible, the notch stays in hover-grown size.
     var isPanelVisible: (() -> Bool)?
 
+    /// The screen this notch window targets (nil = built-in display).
+    private let targetScreenID: CGDirectDisplayID?
+
     /// Detected notch dimensions (updated on screen change).
     private var notchWidth: CGFloat = 180
     private var notchHeight: CGFloat = 37
@@ -36,7 +39,12 @@ class NotchWindow: NSPanel {
     /// SwiftUI content overlay shown inside the pill when expanded
     private var pillContentHost: NSHostingView<NotchPillContent>?
 
-    init(onHover: @escaping () -> Void) {
+    /// Creates a NotchWindow for the given screen.
+    /// - Parameters:
+    ///   - screenID: The CGDirectDisplayID to target, or nil for the built-in display.
+    ///   - onHover: Called when the mouse enters the trigger zone.
+    init(screenID: CGDirectDisplayID? = nil, onHover: @escaping () -> Void) {
+        self.targetScreenID = screenID
         self.onHover = onHover
 
         super.init(
@@ -174,7 +182,7 @@ class NotchWindow: NSPanel {
 
     private func expandWithBounce() {
         isExpanded = true
-        guard let screen = NSScreen.builtIn else { return }
+        guard let screen = resolvedScreen else { return }
         let screenFrame = screen.frame
 
         let targetWidth: CGFloat = notchWidth + 80
@@ -228,7 +236,7 @@ class NotchWindow: NSPanel {
             self.pillContentHost?.animator().alphaValue = 0
         }
 
-        guard let screen = NSScreen.builtIn else { return }
+        guard let screen = resolvedScreen else { return }
         let screenFrame = screen.frame
 
         var targetFrame = NSRect(
@@ -281,7 +289,7 @@ class NotchWindow: NSPanel {
     // MARK: - Notch size detection
 
     private func detectNotchSize() {
-        guard let screen = NSScreen.builtIn else { return }
+        guard let screen = resolvedScreen else { return }
 
         if #available(macOS 12.0, *),
            let left = screen.auxiliaryTopLeftArea,
@@ -300,7 +308,7 @@ class NotchWindow: NSPanel {
     // MARK: - Positioning
 
     private func positionAtNotch() {
-        guard let screen = NSScreen.builtIn else { return }
+        guard let screen = resolvedScreen else { return }
         let screenFrame = screen.frame
         let x = screenFrame.midX - notchWidth / 2
         let y = screenFrame.maxY - notchHeight
@@ -325,7 +333,7 @@ class NotchWindow: NSPanel {
         let mouseLocation = NSEvent.mouseLocation
 
         // Check the notch area itself
-        guard let screen = NSScreen.builtIn else { return }
+        guard let screen = resolvedScreen else { return }
         let screenFrame = screen.frame
         let effectiveWidth = isExpanded ? notchWidth + 80 : notchWidth
         let notchRect = NSRect(
@@ -407,7 +415,7 @@ class NotchWindow: NSPanel {
         pillView.isHovered = false
         pillView.earProtrusion = 0
         pillContentHost?.rootView = NotchPillContent(isHovering: false)
-        guard let screen = NSScreen.builtIn else { return }
+        guard let screen = resolvedScreen else { return }
         let screenFrame = screen.frame
         let baseWidth = isExpanded ? notchWidth + 80 : notchWidth
         let targetFrame = NSRect(
@@ -432,6 +440,17 @@ class NotchWindow: NSPanel {
         }
     }
 
+    /// Resolves the screen this notch window targets.
+    private var resolvedScreen: NSScreen? {
+        if let id = targetScreenID {
+            return NSScreen.screens.first { screen in
+                let screenID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
+                return screenID == id
+            }
+        }
+        return NSScreen.builtIn
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
@@ -439,12 +458,19 @@ class NotchWindow: NSPanel {
 // MARK: - NSScreen helper
 
 extension NSScreen {
+    /// The CGDirectDisplayID for this screen.
+    var displayID: CGDirectDisplayID {
+        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
+    }
+
     /// Returns the built-in display (the one with the notch), or the main screen as fallback.
     static var builtIn: NSScreen? {
-        screens.first { screen in
-            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
-            return CGDisplayIsBuiltin(id) != 0
-        } ?? main
+        screens.first { CGDisplayIsBuiltin($0.displayID) != 0 } ?? main
+    }
+
+    /// Returns all external (non-built-in) screens.
+    static var externalScreens: [NSScreen] {
+        screens.filter { CGDisplayIsBuiltin($0.displayID) == 0 }
     }
 }
 

@@ -4,6 +4,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: TerminalPanel!
     private var notchWindow: NotchWindow?
+    /// NotchWindows for external displays, keyed by CGDirectDisplayID.
+    private var externalNotchWindows: [CGDirectDisplayID: NotchWindow] = [:]
+    private var screenChangeObserver: Any?
     private let sessionStore = SessionStore.shared
     private let settings = SettingsManager.shared
     private var hoverHideTimer: Timer?
@@ -12,6 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyMonitor: Any?
     /// Whether the panel was opened via notch hover (vs status item click)
     private var panelOpenedViaHover = false
+    /// The screen that triggered the current hover-opened panel.
+    private var hoverTriggerScreen: NSScreen?
     private let hoverMargin: CGFloat = 15
     private let hoverHideDelay: TimeInterval = 0.06
 
@@ -22,6 +27,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             setupNotchWindow()
         }
         setupHotkey()
+        if settings.externalDisplayTrigger {
+            setupExternalDisplayWindows()
+        }
+        observeScreenChanges()
         // Detect in background so launch isn't blocked
         sessionStore.detectAllXcodeProjectsAsync()
     }
@@ -47,7 +56,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             guard let self, !self.panel.isVisible else { return }
             self.notchWindow?.endHover()
+            for window in self.externalNotchWindows.values { window.endHover() }
             self.panelOpenedViaHover = false
+            self.hoverTriggerScreen = nil
             self.stopHoverTracking()
         }
         // When panel becomes key (user clicked on it), stop hover tracking
@@ -60,17 +71,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             if self.panelOpenedViaHover {
                 self.panelOpenedViaHover = false
+                self.hoverTriggerScreen = nil
                 self.stopHoverTracking()
                 // Panel is now in "click mode" — shrink the notch hover state
                 // since hover tracking is no longer managing it
                 self.notchWindow?.endHover()
+                for window in self.externalNotchWindows.values { window.endHover() }
             }
         }
     }
 
     private func setupNotchWindow() {
         notchWindow = NotchWindow { [weak self] in
-            self?.notchHovered()
+            self?.notchHovered(on: NSScreen.builtIn)
         }
         notchWindow?.isPanelVisible = { [weak self] in
             self?.panel.isVisible ?? false
@@ -87,17 +100,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func notchHovered() {
+    private func notchHovered(on screen: NSScreen? = nil) {
         guard !panel.isVisible else { return }
-        showPanelBelowNotch()
+        let targetScreen = screen ?? NSScreen.builtIn ?? NSScreen.main!
+        hoverTriggerScreen = targetScreen
+        panel.showPanelCentered(on: targetScreen)
         panelOpenedViaHover = true
         startHoverTracking()
         sessionStore.detectAndSwitchAsync()
-    }
-
-    private func showPanelBelowNotch() {
-        guard let screen = NSScreen.builtIn else { return }
-        panel.showPanelCentered(on: screen)
     }
 
     // MARK: - Hover-to-hide tracking
@@ -134,9 +144,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let mouse = NSEvent.mouseLocation
         let inNotch = notchWindow?.frame.insetBy(dx: -hoverMargin, dy: -hoverMargin).contains(mouse) ?? false
+        let inExternalNotch = externalNotchWindows.values.contains { $0.frame.insetBy(dx: -hoverMargin, dy: -hoverMargin).contains(mouse) }
         let inPanel = panel.frame.insetBy(dx: -hoverMargin, dy: -hoverMargin).contains(mouse)
 
-        if inNotch || inPanel {
+        if inNotch || inExternalNotch || inPanel {
             cancelHoverHide()
         } else {
             scheduleHoverHide()
@@ -150,11 +161,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Re-check one more time before hiding (mouse may have returned)
             let mouse = NSEvent.mouseLocation
             let inNotch = self.notchWindow?.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse) ?? false
+            let inExternalNotch = self.externalNotchWindows.values.contains { $0.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse) }
             let inPanel = self.panel.frame.insetBy(dx: -self.hoverMargin, dy: -self.hoverMargin).contains(mouse)
-            if !inNotch && !inPanel && !self.sessionStore.isPinned && !self.sessionStore.isShowingDialog {
+            if !inNotch && !inExternalNotch && !inPanel && !self.sessionStore.isPinned && !self.sessionStore.isShowingDialog {
                 self.panel.hidePanel()
                 self.notchWindow?.endHover()
+                for window in self.externalNotchWindows.values { window.endHover() }
                 self.panelOpenedViaHover = false
+                self.hoverTriggerScreen = nil
                 self.stopHoverTracking()
             }
         }
@@ -173,7 +187,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if panel.isVisible {
             panel.hidePanel()
             notchWindow?.endHover()
+            for window in externalNotchWindows.values { window.endHover() }
             panelOpenedViaHover = false
+            hoverTriggerScreen = nil
             stopHoverTracking()
         } else {
             panelOpenedViaHover = false
@@ -255,15 +271,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        SettingsWindowController.shared.show { [weak self] showNotch in
-            guard let self else { return }
-            if showNotch {
-                if self.notchWindow == nil { self.setupNotchWindow() }
-            } else {
-                self.notchWindow?.orderOut(nil)
-                self.notchWindow = nil
+        SettingsWindowController.shared.show(
+            onShowNotchChanged: { [weak self] showNotch in
+                guard let self else { return }
+                if showNotch {
+                    if self.notchWindow == nil { self.setupNotchWindow() }
+                } else {
+                    self.notchWindow?.orderOut(nil)
+                    self.notchWindow = nil
+                }
+            },
+            onExternalDisplayChanged: { [weak self] enabled in
+                guard let self else { return }
+                if enabled {
+                    self.setupExternalDisplayWindows()
+                } else {
+                    self.teardownExternalDisplayWindows()
+                }
             }
-        }
+        )
     }
 
     @objc private func createNewSession() {
@@ -278,6 +304,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let screenRect = window.convertToScreen(buttonRect)
             panel.showPanel(below: screenRect)
         }
+    }
+
+    // MARK: - External display management
+
+    private func observeScreenChanges() {
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.settings.externalDisplayTrigger else { return }
+            self.setupExternalDisplayWindows()
+        }
+    }
+
+    private func setupExternalDisplayWindows() {
+        let externalScreens = NSScreen.externalScreens
+        // Remove windows for screens that are no longer connected
+        let currentIDs = Set(externalScreens.map { $0.displayID })
+        for id in externalNotchWindows.keys where !currentIDs.contains(id) {
+            externalNotchWindows[id]?.orderOut(nil)
+            externalNotchWindows.removeValue(forKey: id)
+        }
+        // Create windows for newly connected screens
+        for screen in externalScreens {
+            let id = screen.displayID
+            guard externalNotchWindows[id] == nil else { continue }
+            let window = NotchWindow(screenID: id) { [weak self, weak screen] in
+                self?.notchHovered(on: screen)
+            }
+            window.isPanelVisible = { [weak self] in
+                self?.panel.isVisible ?? false
+            }
+            externalNotchWindows[id] = window
+        }
+    }
+
+    private func teardownExternalDisplayWindows() {
+        for (_, window) in externalNotchWindows {
+            window.orderOut(nil)
+        }
+        externalNotchWindows.removeAll()
     }
 
 }
